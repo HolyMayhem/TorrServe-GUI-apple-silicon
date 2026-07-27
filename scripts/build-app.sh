@@ -3,7 +3,7 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="TorrServer.app"
-APP_DIR="$PROJECT_DIR/.build/app"
+APP_DIR="$PROJECT_DIR/build/app"
 APP_PATH="$APP_DIR/$APP_NAME"
 CONTENTS_DIR="$APP_PATH/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
@@ -21,9 +21,9 @@ cp "$PROJECT_DIR/Resources/PkgInfo" "$CONTENTS_DIR/PkgInfo"
 cp "$PROJECT_DIR/Resources/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
 
 xattr -cr "$APP_PATH"
+chflags nohidden "$APP_PATH"
 xattr -d com.apple.FinderInfo "$APP_PATH" 2>/dev/null || true
 codesign --force --sign - --deep "$APP_PATH"
 xattr -d com.apple.FinderInfo "$APP_PATH" 2>/dev/null || true
-codesign --force --sign - --deep "$APP_PATH"
 
 echo "$APP_PATH"

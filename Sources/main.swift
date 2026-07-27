@@ -5,6 +5,7 @@ private let webUIURL = URL(string: "http://localhost:8090")!
 private let savedPathKey = "TorrServerExecutablePath"
 private let autoStartServerKey = "AutoStartServerOnLaunch"
 private let showSpeedInMenuBarKey = "ShowSpeedInMenuBar"
+private let languageKey = "AppLanguage"
 
 final class StatusDotView: NSView {
     var color: NSColor = .systemGray {
@@ -29,6 +30,119 @@ struct AppError: LocalizedError {
     }
 
     var errorDescription: String? { message }
+}
+
+enum AppLanguage: String {
+    case russian = "ru"
+    case english = "en"
+
+    static var systemDefault: AppLanguage {
+        Locale.current.languageCode == "ru" ? .russian : .english
+    }
+}
+
+struct Texts {
+    let language: AppLanguage
+
+    var about: String { language == .russian ? "О TorrServer" : "About TorrServer" }
+    var quit: String { language == .russian ? "Завершить приложение" : "Quit" }
+    var title: String { "TorrServer" }
+    var choose: String { language == .russian ? "Выбрать" : "Choose" }
+    var downloadArm: String { language == .russian ? "Скачать ARM" : "Download ARM" }
+    var start: String { language == .russian ? "Запустить" : "Start" }
+    var stop: String { language == .russian ? "Остановить" : "Stop" }
+    var webUI: String { language == .russian ? "Web UI" : "Web UI" }
+    var openWebUI: String { language == .russian ? "Открыть Web UI" : "Open Web UI" }
+    var showWindow: String { language == .russian ? "Показать окно" : "Show Window" }
+    var downloadMenu: String {
+        language == .russian
+            ? "Скачать TorrServer для Apple Silicon"
+            : "Download TorrServer for Apple Silicon"
+    }
+    var launchAtLogin: String {
+        language == .russian ? "Открывать при входе в macOS" : "Open at Login"
+    }
+    var autoStartServer: String {
+        language == .russian
+            ? "Запускать сервер при открытии приложения"
+            : "Start server when app opens"
+    }
+    var showSpeed: String {
+        language == .russian
+            ? "Показывать скорость в меню баре"
+            : "Show speed in menu bar"
+    }
+    var languageLabel: String { language == .russian ? "Язык" : "Language" }
+    var russian: String { "Russian" }
+    var english: String { "English" }
+    var stopped: String { language == .russian ? "Остановлен" : "Stopped" }
+    var chooseOrDownload: String {
+        language == .russian ? "Выберите или скачайте TorrServer" : "Choose or download TorrServer"
+    }
+    var torrServerNotSelected: String {
+        language == .russian ? "TorrServer не выбран" : "TorrServer is not selected"
+    }
+    func running(pid: Int32) -> String {
+        language == .russian ? "Работает · PID \(pid)" : "Running · PID \(pid)"
+    }
+    var stopping: String { language == .russian ? "Останавливается…" : "Stopping…" }
+    var downloading: String {
+        language == .russian ? "Скачивается TorrServer…" : "Downloading TorrServer…"
+    }
+    var launchError: String { language == .russian ? "Ошибка запуска" : "Launch Error" }
+    func error(_ message: String) -> String {
+        language == .russian ? "Ошибка: \(message)" : "Error: \(message)"
+    }
+    var speedLabel: String { language == .russian ? "Скорость" : "Speed" }
+    var speedOff: String { language == .russian ? "выключена" : "off" }
+    var speedNoData: String { language == .russian ? "нет данных" : "no data" }
+    var materialsTitle: String { language == .russian ? "Материалы" : "Materials" }
+    var loadingMaterials: String { language == .russian ? "Загрузка…" : "Loading…" }
+    var noMaterials: String { language == .russian ? "Нет материалов" : "No materials" }
+    func moreMaterials(_ count: Int) -> String {
+        language == .russian ? "Еще \(count)…" : "\(count) more…"
+    }
+    var seedsShort: String { "S" }
+    var peersShort: String { "P" }
+    var choosePanelTitle: String {
+        language == .russian
+            ? "Выберите исполняемый файл TorrServer"
+            : "Choose TorrServer executable"
+    }
+    var choosePanelMessage: String {
+        language == .russian
+            ? "Обычно файл называется TorrServer или TorrServer-darwin-arm64."
+            : "The file is usually named TorrServer or TorrServer-darwin-arm64."
+    }
+    var choosePanelPrompt: String { language == .russian ? "Выбрать" : "Choose" }
+    var chooseTorrServerAlertTitle: String {
+        language == .russian ? "Выберите TorrServer" : "Choose TorrServer"
+    }
+    var chooseTorrServerAlertMessage: String {
+        language == .russian
+            ? "Сначала выберите файл вручную или скачайте последнюю версию для Apple Silicon."
+            : "Choose the executable manually or download the latest Apple Silicon version first."
+    }
+    var startFailedTitle: String {
+        language == .russian ? "TorrServer не запущен" : "TorrServer did not start"
+    }
+    var downloadDoneTitle: String {
+        language == .russian ? "TorrServer скачан" : "TorrServer downloaded"
+    }
+    var downloadDoneMessage: String {
+        language == .russian
+            ? "Файл сохранен и выбран автоматически."
+            : "The file was saved and selected automatically."
+    }
+    var downloadFailedTitle: String {
+        language == .russian ? "Не удалось скачать TorrServer" : "Could not download TorrServer"
+    }
+    var launchAtLoginFailedTitle: String {
+        language == .russian ? "Автозапуск не изменен" : "Open at Login was not changed"
+    }
+    var aboutCredits: String {
+        "Created for Holy Mayhem\nNative macOS GUI for TorrServer"
+    }
 }
 
 final class TorrServerProcessController {
@@ -408,11 +522,107 @@ final class TorrServerSpeedMonitor {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
+struct TorrentSummary {
+    let title: String
+    let size: Int64
+    let seeders: Int
+    let activePeers: Int
+    let totalPeers: Int
+    let timestamp: Int64
+    let downloadSpeed: Double
+    let uploadSpeed: Double
+
+    var isActive: Bool {
+        downloadSpeed > 0 || uploadSpeed > 0 || activePeers > 0
+    }
+}
+
+final class TorrServerLibraryClient {
+    private let torrentsURL = URL(string: "http://127.0.0.1:8090/torrents")!
+
+    func fetchTorrents(completion: @escaping (Result<[TorrentSummary], Error>) -> Void) {
+        var request = URLRequest(url: torrentsURL)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 1.5
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = #"{"action":"list"}"#.data(using: .utf8)
+
+        URLSession.shared.dataTask(with: request) { data, _, error in
+            if let error {
+                DispatchQueue.main.async { completion(.failure(error)) }
+                return
+            }
+
+            do {
+                guard let data else {
+                    throw AppError("TorrServer returned no data.")
+                }
+
+                let raw = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] ?? []
+                let torrents = raw.map(Self.parseTorrent).sorted { left, right in
+                    if left.isActive != right.isActive {
+                        return left.isActive
+                    }
+                    return left.timestamp > right.timestamp
+                }
+                DispatchQueue.main.async { completion(.success(torrents)) }
+            } catch {
+                DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        }.resume()
+    }
+
+    private static func parseTorrent(_ dictionary: [String: Any]) -> TorrentSummary {
+        let title = stringValue(dictionary["title"])
+            ?? stringValue(dictionary["name"])
+            ?? stringValue(dictionary["hash"])
+            ?? "Torrent"
+        let size = int64Value(dictionary["torrent_size"])
+            ?? int64Value(dictionary["loaded_size"])
+            ?? 0
+
+        return TorrentSummary(
+            title: title,
+            size: size,
+            seeders: intValue(dictionary["connected_seeders"]),
+            activePeers: intValue(dictionary["active_peers"]),
+            totalPeers: intValue(dictionary["total_peers"]),
+            timestamp: int64Value(dictionary["timestamp"]) ?? 0,
+            downloadSpeed: doubleValue(dictionary["download_speed"]),
+            uploadSpeed: doubleValue(dictionary["upload_speed"])
+        )
+    }
+
+    private static func stringValue(_ value: Any?) -> String? {
+        (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func intValue(_ value: Any?) -> Int {
+        if let value = value as? Int { return value }
+        if let value = value as? NSNumber { return value.intValue }
+        return 0
+    }
+
+    private static func int64Value(_ value: Any?) -> Int64? {
+        if let value = value as? Int64 { return value }
+        if let value = value as? Int { return Int64(value) }
+        if let value = value as? NSNumber { return value.int64Value }
+        return nil
+    }
+
+    private static func doubleValue(_ value: Any?) -> Double {
+        if let value = value as? Double { return value }
+        if let value = value as? NSNumber { return value.doubleValue }
+        return 0
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, NSMenuDelegate {
     private let processController = TorrServerProcessController()
     private let downloader = TorrServerDownloader()
     private let launchAtLoginController = LaunchAtLoginController()
     private let speedMonitor = TorrServerSpeedMonitor()
+    private let libraryClient = TorrServerLibraryClient()
 
     private var window: NSWindow!
     private var pathField: NSTextField!
@@ -421,15 +631,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     private var startButton: NSButton!
     private var stopButton: NSButton!
     private var webButton: NSButton!
+    private var titleLabel: NSTextField!
     private var statusDot: StatusDotView!
     private var statusLabel: NSTextField!
     private var launchAtLoginCheckbox: NSButton!
     private var autoStartCheckbox: NSButton!
     private var showSpeedCheckbox: NSButton!
+    private var languageLabel: NSTextField!
+    private var languageControl: NSSegmentedControl!
 
     private var statusItem: NSStatusItem!
     private var statusMenuItem: NSMenuItem!
     private var speedMenuItem: NSMenuItem!
+    private var materialsHeaderMenuItem: NSMenuItem!
+    private var materialMenuItems: [NSMenuItem] = []
+    private var moreMaterialsMenuItem: NSMenuItem!
+    private var materialsSeparatorMenuItem: NSMenuItem!
     private var showWindowMenuItem: NSMenuItem!
     private var startMenuItem: NSMenuItem!
     private var stopMenuItem: NSMenuItem!
@@ -437,17 +654,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     private var downloadMenuItem: NSMenuItem!
     private var launchAtLoginMenuItem: NSMenuItem!
     private var showSpeedMenuItem: NSMenuItem!
+    private var quitMenuItem: NSMenuItem!
 
     private var isDownloading = false
     private var hasRepliedToTermination = false
     private var currentSpeedBytesPerSecond: Double?
     private var currentStatusIconColor: NSColor = .systemGray
+    private var currentTorrents: [TorrentSummary] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         registerDefaultSettings()
         buildMainMenu()
         buildStatusItem()
         buildWindow()
+        applyLanguage()
 
         processController.onStateChange = { [weak self] state in
             self?.updateUI(for: state)
@@ -497,9 +717,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
     @objc private func chooseExecutable(_ sender: Any?) {
         let panel = NSOpenPanel()
-        panel.title = "Выберите исполняемый файл TorrServer"
-        panel.message = "Обычно файл называется TorrServer или TorrServer-darwin-arm64."
-        panel.prompt = "Выбрать"
+        panel.title = texts.choosePanelTitle
+        panel.message = texts.choosePanelMessage
+        panel.prompt = texts.choosePanelPrompt
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
@@ -528,13 +748,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                 self.saveCurrentPath()
                 self.updateUI(for: self.processController.state)
                 self.showAlert(
-                    title: "TorrServer скачан",
-                    message: "Файл сохранен и выбран автоматически."
+                    title: self.texts.downloadDoneTitle,
+                    message: self.texts.downloadDoneMessage
                 )
             case .failure(let error):
                 self.updateUI(for: self.processController.state)
                 self.showAlert(
-                    title: "Не удалось скачать TorrServer",
+                    title: self.texts.downloadFailedTitle,
                     message: error.localizedDescription
                 )
             }
@@ -546,8 +766,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
         guard hasExecutablePath else {
             showAlert(
-                title: "Выберите TorrServer",
-                message: "Сначала выберите файл вручную или скачайте последнюю версию для Apple Silicon."
+                title: texts.chooseTorrServerAlertTitle,
+                message: texts.chooseTorrServerAlertMessage
             )
             return
         }
@@ -556,7 +776,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             try processController.start(executablePath: executablePath)
         } catch {
             showAlert(
-                title: "TorrServer не запущен",
+                title: texts.startFailedTitle,
                 message: error.localizedDescription
             )
         }
@@ -591,7 +811,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             try launchAtLoginController.setEnabled(nextState)
         } catch {
             showAlert(
-                title: "Автозапуск не изменен",
+                title: texts.launchAtLoginFailedTitle,
                 message: error.localizedDescription
             )
         }
@@ -618,6 +838,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         updateUI(for: processController.state)
     }
 
+    @objc private func changeLanguage(_ sender: NSSegmentedControl) {
+        currentLanguage = sender.selectedSegment == 0 ? .russian : .english
+        applyLanguage()
+        updateUI(for: processController.state)
+        updateMaterialsMenu(with: currentTorrents)
+    }
+
     @objc private func showAboutPanel(_ sender: Any?) {
         let version = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"
@@ -626,7 +853,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             forInfoDictionaryKey: "CFBundleVersion"
         ) as? String ?? "4"
         let credits = NSAttributedString(
-            string: "Created for Holy Mayhem\nNative macOS GUI for TorrServer",
+            string: texts.aboutCredits,
             attributes: [
                 .font: NSFont.systemFont(ofSize: 12),
                 .foregroundColor: NSColor.secondaryLabelColor
@@ -652,6 +879,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         UserDefaults.standard.bool(forKey: showSpeedInMenuBarKey)
     }
 
+    private var currentLanguage: AppLanguage {
+        get {
+            if let rawValue = UserDefaults.standard.string(forKey: languageKey),
+               let language = AppLanguage(rawValue: rawValue) {
+                return language
+            }
+            return .systemDefault
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: languageKey)
+        }
+    }
+
+    private var texts: Texts {
+        Texts(language: currentLanguage)
+    }
+
     private func registerDefaultSettings() {
         UserDefaults.standard.register(defaults: [
             showSpeedInMenuBarKey: true
@@ -660,7 +904,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
     private func buildWindow() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 294),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 356),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -672,7 +916,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         contentView.translatesAutoresizingMaskIntoConstraints = false
         window.contentView = contentView
 
-        let titleLabel = NSTextField(labelWithString: "TorrServer")
+        titleLabel = NSTextField(labelWithString: "TorrServer")
         titleLabel.font = .systemFont(ofSize: 22, weight: .semibold)
 
         statusDot = StatusDotView()
@@ -745,6 +989,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             ? .on
             : .off
 
+        showSpeedCheckbox = NSButton(
+            checkboxWithTitle: "Показывать скорость в меню баре",
+            target: self,
+            action: #selector(toggleSpeedInMenuBar(_:))
+        )
+        showSpeedCheckbox.font = .systemFont(ofSize: 12)
+        showSpeedCheckbox.state = isSpeedDisplayEnabled ? .on : .off
+
+        languageLabel = NSTextField(labelWithString: "Language")
+        languageLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        languageLabel.textColor = .secondaryLabelColor
+
+        languageControl = NSSegmentedControl(
+            labels: ["Russian", "English"],
+            trackingMode: .selectOne,
+            target: self,
+            action: #selector(changeLanguage(_:))
+        )
+        languageControl.segmentStyle = .rounded
+        languageControl.selectedSegment = currentLanguage == .russian ? 0 : 1
+
         let pathButtonsStack = NSStackView(views: [browseButton, downloadButton])
         pathButtonsStack.orientation = .horizontal
         pathButtonsStack.spacing = 8
@@ -757,7 +1022,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
         [
             titleLabel, statusStack, pathField, pathButtonsStack,
-            actionStack, launchAtLoginCheckbox, autoStartCheckbox
+            actionStack, launchAtLoginCheckbox, autoStartCheckbox,
+            showSpeedCheckbox, languageLabel, languageControl
         ].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
             contentView.addSubview($0)
@@ -792,7 +1058,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
             autoStartCheckbox.topAnchor.constraint(equalTo: launchAtLoginCheckbox.bottomAnchor, constant: 6),
             autoStartCheckbox.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            autoStartCheckbox.trailingAnchor.constraint(equalTo: pathField.trailingAnchor)
+            autoStartCheckbox.trailingAnchor.constraint(equalTo: pathField.trailingAnchor),
+
+            showSpeedCheckbox.topAnchor.constraint(equalTo: autoStartCheckbox.bottomAnchor, constant: 6),
+            showSpeedCheckbox.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            showSpeedCheckbox.trailingAnchor.constraint(equalTo: pathField.trailingAnchor),
+
+            languageLabel.topAnchor.constraint(equalTo: showSpeedCheckbox.bottomAnchor, constant: 16),
+            languageLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            languageLabel.centerYAnchor.constraint(equalTo: languageControl.centerYAnchor),
+
+            languageControl.topAnchor.constraint(equalTo: showSpeedCheckbox.bottomAnchor, constant: 12),
+            languageControl.trailingAnchor.constraint(equalTo: pathField.trailingAnchor),
+            languageControl.widthAnchor.constraint(equalToConstant: 190)
         ])
     }
 
@@ -802,14 +1080,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         mainMenu.addItem(appMenuItem)
 
         let appMenu = NSMenu()
-        appMenu.addItem(
-            withTitle: "О TorrServer",
-            action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+        let aboutItem = appMenu.addItem(
+            withTitle: texts.about,
+            action: #selector(showAboutPanel(_:)),
             keyEquivalent: ""
         )
+        aboutItem.target = self
         appMenu.addItem(.separator())
         appMenu.addItem(
-            withTitle: "Завершить приложение",
+            withTitle: texts.quit,
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"
         )
@@ -818,57 +1097,87 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
 
     private func buildStatusItem() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.toolTip = "TorrServer"
+        statusItem.button?.imagePosition = .imageLeading
+        statusItem.button?.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
 
         let menu = NSMenu()
-        statusMenuItem = NSMenuItem(title: "Остановлен", action: nil, keyEquivalent: "")
+        menu.delegate = self
+        statusMenuItem = NSMenuItem(title: texts.stopped, action: nil, keyEquivalent: "")
         statusMenuItem.isEnabled = false
 
+        speedMenuItem = NSMenuItem(
+            title: "\(texts.speedLabel): \(texts.speedNoData)",
+            action: nil,
+            keyEquivalent: ""
+        )
+        speedMenuItem.isEnabled = false
+
+        materialsHeaderMenuItem = NSMenuItem(
+            title: texts.materialsTitle,
+            action: nil,
+            keyEquivalent: ""
+        )
+        materialsHeaderMenuItem.isEnabled = false
+        moreMaterialsMenuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        moreMaterialsMenuItem.isEnabled = false
+        materialsSeparatorMenuItem = .separator()
+
         showWindowMenuItem = NSMenuItem(
-            title: "Показать окно",
+            title: texts.showWindow,
             action: #selector(showMainWindow(_:)),
             keyEquivalent: ""
         )
         showWindowMenuItem.target = self
 
         startMenuItem = NSMenuItem(
-            title: "Запустить",
+            title: texts.start,
             action: #selector(startServer(_:)),
             keyEquivalent: ""
         )
         startMenuItem.target = self
 
         stopMenuItem = NSMenuItem(
-            title: "Остановить",
+            title: texts.stop,
             action: #selector(stopServer(_:)),
             keyEquivalent: ""
         )
         stopMenuItem.target = self
 
         openWebMenuItem = NSMenuItem(
-            title: "Открыть Web UI",
+            title: texts.openWebUI,
             action: #selector(openWebUI(_:)),
             keyEquivalent: ""
         )
         openWebMenuItem.target = self
 
         downloadMenuItem = NSMenuItem(
-            title: "Скачать TorrServer для Apple Silicon",
+            title: texts.downloadMenu,
             action: #selector(downloadLatestTorrServer(_:)),
             keyEquivalent: ""
         )
         downloadMenuItem.target = self
 
         launchAtLoginMenuItem = NSMenuItem(
-            title: "Открывать при входе в macOS",
+            title: texts.launchAtLogin,
             action: #selector(toggleLaunchAtLogin(_:)),
             keyEquivalent: ""
         )
         launchAtLoginMenuItem.target = self
 
+        showSpeedMenuItem = NSMenuItem(
+            title: texts.showSpeed,
+            action: #selector(toggleSpeedInMenuBar(_:)),
+            keyEquivalent: ""
+        )
+        showSpeedMenuItem.target = self
+
         menu.addItem(statusMenuItem)
+        menu.addItem(speedMenuItem)
         menu.addItem(.separator())
+        menu.addItem(materialsHeaderMenuItem)
+        menu.addItem(materialsSeparatorMenuItem)
         menu.addItem(startMenuItem)
         menu.addItem(stopMenuItem)
         menu.addItem(openWebMenuItem)
@@ -876,9 +1185,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         menu.addItem(showWindowMenuItem)
         menu.addItem(downloadMenuItem)
         menu.addItem(launchAtLoginMenuItem)
+        menu.addItem(showSpeedMenuItem)
         menu.addItem(.separator())
-        menu.addItem(
-            withTitle: "Завершить приложение",
+        quitMenuItem = menu.addItem(
+            withTitle: texts.quit,
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: ""
         )
@@ -886,21 +1196,131 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         statusItem.menu = menu
     }
 
+    func menuWillOpen(_ menu: NSMenu) {
+        guard menu === statusItem.menu else { return }
+        refreshMaterialsMenu()
+    }
+
+    private func applyLanguage() {
+        let language = currentLanguage
+        let texts = self.texts
+
+        buildMainMenu()
+        window?.title = texts.title
+        titleLabel?.stringValue = texts.title
+        browseButton?.title = texts.choose
+        downloadButton?.title = texts.downloadArm
+        startButton?.title = texts.start
+        stopButton?.title = texts.stop
+        webButton?.title = texts.webUI
+        launchAtLoginCheckbox?.title = texts.launchAtLogin
+        autoStartCheckbox?.title = texts.autoStartServer
+        showSpeedCheckbox?.title = texts.showSpeed
+        languageLabel?.stringValue = texts.languageLabel
+        languageControl?.setLabel(texts.russian, forSegment: 0)
+        languageControl?.setLabel(texts.english, forSegment: 1)
+        languageControl?.selectedSegment = language == .russian ? 0 : 1
+
+        showWindowMenuItem?.title = texts.showWindow
+        startMenuItem?.title = texts.start
+        stopMenuItem?.title = texts.stop
+        openWebMenuItem?.title = texts.openWebUI
+        downloadMenuItem?.title = texts.downloadMenu
+        launchAtLoginMenuItem?.title = texts.launchAtLogin
+        showSpeedMenuItem?.title = texts.showSpeed
+        quitMenuItem?.title = texts.quit
+        materialsHeaderMenuItem?.title = texts.materialsTitle
+        refreshSpeedDisplay()
+    }
+
+    private func refreshMaterialsMenu() {
+        guard processController.isRunning else {
+            currentTorrents = []
+            updateMaterialsMenu(with: [])
+            return
+        }
+
+        setMaterialsLoading()
+        libraryClient.fetchTorrents { [weak self] result in
+            guard let self else { return }
+
+            switch result {
+            case .success(let torrents):
+                self.currentTorrents = torrents
+                self.updateMaterialsMenu(with: torrents)
+            case .failure:
+                self.currentTorrents = []
+                self.updateMaterialsMenu(with: [])
+            }
+        }
+    }
+
+    private func setMaterialsLoading() {
+        replaceMaterialMenuItems([
+            disabledMenuItem(title: texts.loadingMaterials)
+        ])
+    }
+
+    private func updateMaterialsMenu(with torrents: [TorrentSummary]) {
+        let visible = Array(torrents.prefix(5))
+        var items: [NSMenuItem]
+
+        if visible.isEmpty {
+            items = [disabledMenuItem(title: texts.noMaterials)]
+        } else {
+            items = visible.map { torrent in
+                disabledMenuItem(title: makeMaterialMenuTitle(for: torrent))
+            }
+            if torrents.count > visible.count {
+                items.append(disabledMenuItem(title: texts.moreMaterials(torrents.count - visible.count)))
+            }
+        }
+
+        replaceMaterialMenuItems(items)
+    }
+
+    private func replaceMaterialMenuItems(_ items: [NSMenuItem]) {
+        guard let menu = statusItem.menu else { return }
+
+        materialMenuItems.forEach { menu.removeItem($0) }
+        materialMenuItems = items
+
+        let insertionIndex = menu.index(of: materialsSeparatorMenuItem)
+        let index = insertionIndex == -1 ? menu.numberOfItems : insertionIndex
+        for item in items.reversed() {
+            menu.insertItem(item, at: index)
+        }
+    }
+
+    private func disabledMenuItem(title: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        return item
+    }
+
+    private func makeMaterialMenuTitle(for torrent: TorrentSummary) -> String {
+        let title = Self.truncate(torrent.title, maxLength: 34)
+        let size = Self.formatFileSize(torrent.size)
+        let peers = max(torrent.activePeers, torrent.totalPeers)
+        return "\(title) · \(size) · \(texts.seedsShort) \(torrent.seeders) · \(texts.peersShort) \(peers)"
+    }
+
     private func updateUI(for state: TorrServerProcessController.State) {
         let hasPath = hasExecutablePath
+        updateSpeedMonitor(for: state)
 
         if isDownloading {
             applyUIState(
                 dotColor: .systemOrange,
-                statusText: "Скачивается TorrServer…",
+                statusText: texts.downloading,
                 canStart: false,
                 canStop: false,
                 canBrowse: false,
                 canDownload: false,
                 canOpenWeb: false,
                 canEditPath: false,
-                menuStatus: "Скачивается TorrServer…",
-                statusIconColor: .systemOrange
+                menuStatus: texts.downloading,
+                statusIconColor: .systemGray
             )
             return
         }
@@ -909,59 +1329,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         case .stopped:
             applyUIState(
                 dotColor: .systemGray,
-                statusText: hasPath ? "Остановлен" : "Выберите или скачайте TorrServer",
+                statusText: hasPath ? texts.stopped : texts.chooseOrDownload,
                 canStart: hasPath,
                 canStop: false,
                 canBrowse: true,
                 canDownload: true,
                 canOpenWeb: true,
                 canEditPath: true,
-                menuStatus: hasPath ? "Остановлен" : "TorrServer не выбран",
+                menuStatus: hasPath ? texts.stopped : texts.torrServerNotSelected,
                 statusIconColor: .systemGray
             )
 
         case .running(let pid):
             applyUIState(
                 dotColor: .systemGreen,
-                statusText: "Работает · PID \(pid)",
+                statusText: texts.running(pid: pid),
                 canStart: false,
                 canStop: true,
                 canBrowse: false,
                 canDownload: false,
                 canOpenWeb: true,
                 canEditPath: false,
-                menuStatus: "Работает · PID \(pid)",
+                menuStatus: texts.running(pid: pid),
                 statusIconColor: .systemGreen
             )
 
         case .stopping:
             applyUIState(
                 dotColor: .systemOrange,
-                statusText: "Останавливается…",
+                statusText: texts.stopping,
                 canStart: false,
                 canStop: false,
                 canBrowse: false,
                 canDownload: false,
                 canOpenWeb: false,
                 canEditPath: false,
-                menuStatus: "Останавливается…",
-                statusIconColor: .systemOrange
+                menuStatus: texts.stopping,
+                statusIconColor: .systemGray
             )
 
         case .failed(let message):
             applyUIState(
                 dotColor: .systemRed,
-                statusText: "Ошибка: \(message)",
+                statusText: texts.error(message),
                 canStart: hasPath,
                 canStop: false,
                 canBrowse: true,
                 canDownload: true,
                 canOpenWeb: true,
                 canEditPath: true,
-                menuStatus: "Ошибка запуска",
-                statusIconColor: .systemRed
+                menuStatus: texts.launchError,
+                statusIconColor: .systemGray
             )
             statusLabel.toolTip = message
+        }
+    }
+
+    private func updateSpeedMonitor(for state: TorrServerProcessController.State) {
+        let shouldRun: Bool
+        if case .running = state, isSpeedDisplayEnabled {
+            shouldRun = true
+        } else {
+            shouldRun = false
+        }
+
+        if shouldRun {
+            speedMonitor.start()
+        } else {
+            speedMonitor.stop()
+            currentSpeedBytesPerSecond = nil
         }
     }
 
@@ -992,6 +1428,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         autoStartCheckbox.state = UserDefaults.standard.bool(forKey: autoStartServerKey)
             ? .on
             : .off
+        showSpeedCheckbox.state = isSpeedDisplayEnabled ? .on : .off
 
         statusMenuItem.title = menuStatus
         startMenuItem.isEnabled = canStart
@@ -999,8 +1436,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         openWebMenuItem.isEnabled = canOpenWeb
         downloadMenuItem.isEnabled = canDownload
         launchAtLoginMenuItem.state = launchAtLoginController.isEnabled ? .on : .off
+        showSpeedMenuItem.state = isSpeedDisplayEnabled ? .on : .off
 
-        statusItem.button?.image = makeMenuBarImage(color: statusIconColor)
+        currentStatusIconColor = statusIconColor
+        refreshSpeedDisplay()
     }
 
     private func makeMenuBarImage(color: NSColor) -> NSImage {
@@ -1008,21 +1447,82 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let image = NSImage(size: size)
         image.lockFocus()
 
-        let rect = NSRect(x: 3, y: 3, width: 12, height: 12)
+        let rect = NSRect(x: 2, y: 2, width: 14, height: 14)
         color.setFill()
-        NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4).fill()
+        NSBezierPath(ovalIn: rect).fill()
 
-        NSColor.white.withAlphaComponent(0.95).setFill()
-        let triangle = NSBezierPath()
-        triangle.move(to: NSPoint(x: 7, y: 6))
-        triangle.line(to: NSPoint(x: 7, y: 12))
-        triangle.line(to: NSPoint(x: 12, y: 9))
-        triangle.close()
-        triangle.fill()
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.alignment = .center
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 10, weight: .heavy),
+            .foregroundColor: NSColor.white,
+            .paragraphStyle: paragraphStyle
+        ]
+        NSString(string: "T").draw(
+            in: NSRect(x: 2, y: 3, width: 14, height: 12),
+            withAttributes: attributes
+        )
 
         image.unlockFocus()
         image.isTemplate = false
         return image
+    }
+
+    private func refreshSpeedDisplay() {
+        guard statusItem != nil else { return }
+
+        let isServerRunning = processController.isRunning
+        let speedText: String
+        if isSpeedDisplayEnabled, isServerRunning {
+            speedText = currentSpeedBytesPerSecond.map(Self.formatSpeed) ?? texts.speedNoData
+        } else if isSpeedDisplayEnabled {
+            speedText = texts.stopped
+        } else {
+            speedText = texts.speedOff
+        }
+
+        speedMenuItem.title = "\(texts.speedLabel): \(speedText)"
+        showSpeedMenuItem.state = isSpeedDisplayEnabled ? .on : .off
+
+        let shouldShowSpeed = isSpeedDisplayEnabled
+            && isServerRunning
+            && (currentSpeedBytesPerSecond ?? 0) > 0
+        let title = shouldShowSpeed
+            ? currentSpeedBytesPerSecond.map(Self.formatSpeed) ?? ""
+            : ""
+
+        statusItem.length = title.isEmpty
+            ? NSStatusItem.squareLength
+            : NSStatusItem.variableLength
+        statusItem.button?.image = makeMenuBarImage(color: currentStatusIconColor)
+        statusItem.button?.title = title.isEmpty ? "" : " \(title)"
+        statusItem.button?.toolTip = title.isEmpty
+            ? "TorrServer"
+            : "TorrServer · \(title)"
+    }
+
+    private static func formatSpeed(_ bytesPerSecond: Double) -> String {
+        if bytesPerSecond >= 1024 * 1024 {
+            return String(format: "%.1f MB/s", bytesPerSecond / 1024 / 1024)
+        }
+
+        return String(format: "%.0f KB/s", bytesPerSecond / 1024)
+    }
+
+    private static func formatFileSize(_ bytes: Int64) -> String {
+        guard bytes > 0 else { return "0 MB" }
+
+        let value = Double(bytes)
+        if value >= 1024 * 1024 * 1024 {
+            return String(format: "%.1f GB", value / 1024 / 1024 / 1024)
+        }
+
+        return String(format: "%.0f MB", value / 1024 / 1024)
+    }
+
+    private static func truncate(_ text: String, maxLength: Int) -> String {
+        guard text.count > maxLength else { return text }
+        return String(text.prefix(maxLength - 1)) + "…"
     }
 
     private func saveCurrentPath() {
