@@ -1,5 +1,6 @@
 import AppKit
 import Darwin
+import SwiftUI
 
 private let webUIURL = URL(string: "http://localhost:8090")!
 private let savedPathKey = "TorrServerExecutablePath"
@@ -7,21 +8,6 @@ private let autoStartServerKey = "AutoStartServerOnLaunch"
 private let showSpeedInMenuBarKey = "ShowSpeedInMenuBar"
 private let hideDockIconKey = "HideDockIcon"
 private let languageKey = "AppLanguage"
-
-final class StatusDotView: NSView {
-    var color: NSColor = .systemGray {
-        didSet { needsDisplay = true }
-    }
-
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: 12, height: 12)
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        color.setFill()
-        NSBezierPath(ovalIn: bounds.insetBy(dx: 1, dy: 1)).fill()
-    }
-}
 
 struct AppError: LocalizedError {
     let message: String
@@ -619,30 +605,15 @@ final class TorrServerLibraryClient {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let processController = TorrServerProcessController()
     private let downloader = TorrServerDownloader()
     private let launchAtLoginController = LaunchAtLoginController()
     private let speedMonitor = TorrServerSpeedMonitor()
     private let libraryClient = TorrServerLibraryClient()
+    private let mainWindowModel = MainWindowModel()
 
     private var window: NSWindow!
-    private var pathField: NSTextField!
-    private var browseButton: NSButton!
-    private var downloadButton: NSButton!
-    private var startButton: NSButton!
-    private var stopButton: NSButton!
-    private var webButton: NSButton!
-    private var titleLabel: NSTextField!
-    private var statusDot: StatusDotView!
-    private var statusLabel: NSTextField!
-    private var launchAtLoginCheckbox: NSButton!
-    private var autoStartCheckbox: NSButton!
-    private var showSpeedCheckbox: NSButton!
-    private var hideDockCheckbox: NSButton!
-    private var languageLabel: NSTextField!
-    private var languageControl: NSSegmentedControl!
-    private var menuBarGlyph: NSImage?
 
     private var statusItem: NSStatusItem!
     private var statusMenuItem: NSMenuItem!
@@ -714,11 +685,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         return .terminateLater
     }
 
-    func controlTextDidEndEditing(_ obj: Notification) {
-        saveCurrentPath()
-        updateUI(for: processController.state)
-    }
-
     @objc private func chooseExecutable(_ sender: Any?) {
         let panel = NSOpenPanel()
         panel.title = texts.choosePanelTitle
@@ -730,7 +696,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         panel.treatsFilePackagesAsDirectories = false
 
         if panel.runModal() == .OK, let url = panel.url {
-            pathField.stringValue = url.path
+            mainWindowModel.path = url.path
             saveCurrentPath()
             updateUI(for: processController.state)
         }
@@ -748,7 +714,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
 
             switch result {
             case .success(let url):
-                self.pathField.stringValue = url.path
+                self.mainWindowModel.path = url.path
                 self.saveCurrentPath()
                 self.updateUI(for: self.processController.state)
                 self.showAlert(
@@ -811,8 +777,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
             nextState = !launchAtLoginController.isEnabled
         }
 
+        setLaunchAtLogin(nextState)
+    }
+
+    private func setLaunchAtLogin(_ enabled: Bool) {
         do {
-            try launchAtLoginController.setEnabled(nextState)
+            try launchAtLoginController.setEnabled(enabled)
         } catch {
             showAlert(
                 title: texts.launchAtLoginFailedTitle,
@@ -822,8 +792,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         updateUI(for: processController.state)
     }
 
-    @objc private func toggleAutoStartServer(_ sender: NSButton) {
-        UserDefaults.standard.set(sender.state == .on, forKey: autoStartServerKey)
+    private func setAutoStartServer(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: autoStartServerKey)
         updateUI(for: processController.state)
     }
 
@@ -835,21 +805,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
             nextState = !isSpeedDisplayEnabled
         }
 
-        UserDefaults.standard.set(nextState, forKey: showSpeedInMenuBarKey)
-        if !nextState {
+        setSpeedInMenuBar(nextState)
+    }
+
+    private func setSpeedInMenuBar(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: showSpeedInMenuBarKey)
+        if !enabled {
             currentSpeedBytesPerSecond = nil
         }
         updateUI(for: processController.state)
     }
 
-    @objc private func toggleHideDockIcon(_ sender: NSButton) {
-        UserDefaults.standard.set(sender.state == .on, forKey: hideDockIconKey)
+    private func setHideDockIcon(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: hideDockIconKey)
         applyActivationPolicy()
         updateUI(for: processController.state)
     }
 
-    @objc private func changeLanguage(_ sender: NSSegmentedControl) {
-        currentLanguage = sender.selectedSegment == 0 ? .russian : .english
+    private func setLanguage(_ language: AppLanguage) {
+        currentLanguage = language
         applyLanguage()
         updateUI(for: processController.state)
         updateMaterialsMenu(with: currentTorrents)
@@ -878,7 +852,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
     }
 
     private var executablePath: String {
-        pathField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        mainWindowModel.path.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var hasExecutablePath: Bool {
@@ -920,202 +894,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
 
     private func buildWindow() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 540, height: 390),
-            styleMask: [.titled, .closable, .miniaturizable],
+            contentRect: NSRect(x: 0, y: 0, width: 580, height: 540),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "TorrServer"
         window.isReleasedWhenClosed = false
-        window.titlebarAppearsTransparent = true
-        window.isMovableByWindowBackground = true
-        window.backgroundColor = .clear
+        window.titlebarAppearsTransparent = false
+        window.titleVisibility = .visible
+        window.isMovableByWindowBackground = false
+        window.backgroundColor = .windowBackgroundColor
+        window.isOpaque = true
+        window.collectionBehavior.insert(.fullScreenPrimary)
+        window.minSize = NSSize(width: 530, height: 500)
 
-        let contentView = NSVisualEffectView()
-        contentView.translatesAutoresizingMaskIntoConstraints = false
-        contentView.material = .hudWindow
-        contentView.blendingMode = .behindWindow
-        contentView.state = .active
-        window.contentView = contentView
-
-        titleLabel = NSTextField(labelWithString: "TorrServer")
-        titleLabel.font = .systemFont(ofSize: 22, weight: .semibold)
-
-        statusDot = StatusDotView()
-        statusLabel = NSTextField(labelWithString: "Остановлен")
-        statusLabel.font = .systemFont(ofSize: 13, weight: .medium)
-
-        let statusStack = NSStackView(views: [statusDot, statusLabel])
-        statusStack.orientation = .horizontal
-        statusStack.alignment = .centerY
-        statusStack.spacing = 8
-
-        pathField = NSTextField(
-            string: UserDefaults.standard.string(forKey: savedPathKey) ?? ""
-        )
-        pathField.placeholderString = "Путь к TorrServer"
-        pathField.delegate = self
-        pathField.lineBreakMode = .byTruncatingMiddle
-        pathField.setAccessibilityLabel("Путь к исполняемому файлу TorrServer")
-        pathField.controlSize = .large
-
-        browseButton = NSButton(
-            title: "Выбрать",
-            target: self,
-            action: #selector(chooseExecutable(_:))
-        )
-        browseButton.bezelStyle = .rounded
-        browseButton.controlSize = .large
-
-        downloadButton = NSButton(
-            title: "Скачать ARM",
-            target: self,
-            action: #selector(downloadLatestTorrServer(_:))
-        )
-        downloadButton.bezelStyle = .rounded
-        downloadButton.controlSize = .large
-
-        startButton = NSButton(
-            title: "Запустить",
-            target: self,
-            action: #selector(startServer(_:))
-        )
-        startButton.bezelStyle = .rounded
-        startButton.controlSize = .large
-        startButton.keyEquivalent = "\r"
-
-        stopButton = NSButton(
-            title: "Остановить",
-            target: self,
-            action: #selector(stopServer(_:))
-        )
-        stopButton.bezelStyle = .rounded
-        stopButton.controlSize = .large
-
-        webButton = NSButton(
-            title: "Web UI",
-            target: self,
-            action: #selector(openWebUI(_:))
-        )
-        webButton.bezelStyle = .rounded
-        webButton.controlSize = .large
-
-        launchAtLoginCheckbox = NSButton(
-            checkboxWithTitle: "Открывать при входе в macOS",
-            target: self,
-            action: #selector(toggleLaunchAtLogin(_:))
-        )
-        launchAtLoginCheckbox.font = .systemFont(ofSize: 12)
-
-        autoStartCheckbox = NSButton(
-            checkboxWithTitle: "Запускать сервер при открытии приложения",
-            target: self,
-            action: #selector(toggleAutoStartServer(_:))
-        )
-        autoStartCheckbox.font = .systemFont(ofSize: 12)
-        autoStartCheckbox.state = UserDefaults.standard.bool(forKey: autoStartServerKey)
-            ? .on
-            : .off
-
-        showSpeedCheckbox = NSButton(
-            checkboxWithTitle: "Показывать скорость в меню баре",
-            target: self,
-            action: #selector(toggleSpeedInMenuBar(_:))
-        )
-        showSpeedCheckbox.font = .systemFont(ofSize: 12)
-        showSpeedCheckbox.state = isSpeedDisplayEnabled ? .on : .off
-
-        hideDockCheckbox = NSButton(
-            checkboxWithTitle: "Только меню бар, без значка в Dock",
-            target: self,
-            action: #selector(toggleHideDockIcon(_:))
-        )
-        hideDockCheckbox.font = .systemFont(ofSize: 12)
-        hideDockCheckbox.state = UserDefaults.standard.bool(forKey: hideDockIconKey)
-            ? .on
-            : .off
-
-        languageLabel = NSTextField(labelWithString: "Language")
-        languageLabel.font = .systemFont(ofSize: 12, weight: .medium)
-        languageLabel.textColor = .secondaryLabelColor
-
-        languageControl = NSSegmentedControl(
-            labels: ["Russian", "English"],
-            trackingMode: .selectOne,
-            target: self,
-            action: #selector(changeLanguage(_:))
-        )
-        languageControl.segmentStyle = .capsule
-        languageControl.controlSize = .large
-        languageControl.selectedSegment = currentLanguage == .russian ? 0 : 1
-
-        let pathButtonsStack = NSStackView(views: [browseButton, downloadButton])
-        pathButtonsStack.orientation = .horizontal
-        pathButtonsStack.spacing = 8
-        pathButtonsStack.distribution = .fillEqually
-
-        let actionStack = NSStackView(views: [startButton, stopButton, webButton])
-        actionStack.orientation = .horizontal
-        actionStack.spacing = 8
-        actionStack.distribution = .fillEqually
-
-        [
-            titleLabel, statusStack, pathField, pathButtonsStack,
-            actionStack, launchAtLoginCheckbox, autoStartCheckbox,
-            showSpeedCheckbox, hideDockCheckbox, languageLabel, languageControl
-        ].forEach {
-            $0.translatesAutoresizingMaskIntoConstraints = false
-            contentView.addSubview($0)
+        mainWindowModel.path = UserDefaults.standard.string(forKey: savedPathKey) ?? ""
+        mainWindowModel.language = currentLanguage
+        mainWindowModel.onPathChanged = { [weak self] _ in
+            guard let self else { return }
+            self.saveCurrentPath()
+            self.updateUI(for: self.processController.state)
+        }
+        mainWindowModel.onChoose = { [weak self] in self?.chooseExecutable(nil) }
+        mainWindowModel.onDownload = { [weak self] in self?.downloadLatestTorrServer(nil) }
+        mainWindowModel.onStart = { [weak self] in self?.startServer(nil) }
+        mainWindowModel.onStop = { [weak self] in self?.stopServer(nil) }
+        mainWindowModel.onOpenWeb = { [weak self] in self?.openWebUI(nil) }
+        mainWindowModel.onLaunchAtLoginChanged = { [weak self] enabled in
+            self?.setLaunchAtLogin(enabled)
+        }
+        mainWindowModel.onAutoStartChanged = { [weak self] enabled in
+            self?.setAutoStartServer(enabled)
+        }
+        mainWindowModel.onShowSpeedChanged = { [weak self] enabled in
+            self?.setSpeedInMenuBar(enabled)
+        }
+        mainWindowModel.onHideDockIconChanged = { [weak self] enabled in
+            self?.setHideDockIcon(enabled)
+        }
+        mainWindowModel.onLanguageChanged = { [weak self] language in
+            self?.setLanguage(language)
         }
 
-        NSLayoutConstraint.activate([
-            titleLabel.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 22),
-            titleLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 24),
-
-            statusStack.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
-            statusStack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -24),
-            statusDot.widthAnchor.constraint(equalToConstant: 12),
-            statusDot.heightAnchor.constraint(equalToConstant: 12),
-
-            pathField.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 22),
-            pathField.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            pathField.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -24),
-
-            pathButtonsStack.topAnchor.constraint(equalTo: pathField.bottomAnchor, constant: 10),
-            pathButtonsStack.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            pathButtonsStack.trailingAnchor.constraint(equalTo: pathField.trailingAnchor),
-            pathButtonsStack.heightAnchor.constraint(equalToConstant: 32),
-
-            actionStack.topAnchor.constraint(equalTo: pathButtonsStack.bottomAnchor, constant: 16),
-            actionStack.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            actionStack.trailingAnchor.constraint(equalTo: pathField.trailingAnchor),
-            actionStack.heightAnchor.constraint(equalToConstant: 34),
-
-            launchAtLoginCheckbox.topAnchor.constraint(equalTo: actionStack.bottomAnchor, constant: 18),
-            launchAtLoginCheckbox.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            launchAtLoginCheckbox.trailingAnchor.constraint(equalTo: pathField.trailingAnchor),
-
-            autoStartCheckbox.topAnchor.constraint(equalTo: launchAtLoginCheckbox.bottomAnchor, constant: 6),
-            autoStartCheckbox.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            autoStartCheckbox.trailingAnchor.constraint(equalTo: pathField.trailingAnchor),
-
-            showSpeedCheckbox.topAnchor.constraint(equalTo: autoStartCheckbox.bottomAnchor, constant: 6),
-            showSpeedCheckbox.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            showSpeedCheckbox.trailingAnchor.constraint(equalTo: pathField.trailingAnchor),
-
-            hideDockCheckbox.topAnchor.constraint(equalTo: showSpeedCheckbox.bottomAnchor, constant: 6),
-            hideDockCheckbox.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            hideDockCheckbox.trailingAnchor.constraint(equalTo: pathField.trailingAnchor),
-
-            languageLabel.topAnchor.constraint(equalTo: hideDockCheckbox.bottomAnchor, constant: 18),
-            languageLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            languageLabel.centerYAnchor.constraint(equalTo: languageControl.centerYAnchor),
-
-            languageControl.topAnchor.constraint(equalTo: hideDockCheckbox.bottomAnchor, constant: 12),
-            languageControl.trailingAnchor.constraint(equalTo: pathField.trailingAnchor),
-            languageControl.widthAnchor.constraint(equalToConstant: 220),
-            languageControl.heightAnchor.constraint(equalToConstant: 28)
-        ])
+        window.contentView = NSHostingView(
+            rootView: MainWindowView(model: mainWindowModel)
+        )
     }
 
     private func buildMainMenu() {
@@ -1144,6 +968,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.toolTip = "TorrServer"
         statusItem.button?.imagePosition = .imageLeading
+        statusItem.button?.imageScaling = .scaleProportionallyUpOrDown
         statusItem.button?.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
 
         let menu = NSMenu()
@@ -1249,20 +1074,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
 
         buildMainMenu()
         window?.title = texts.title
-        titleLabel?.stringValue = texts.title
-        browseButton?.title = texts.choose
-        downloadButton?.title = texts.downloadArm
-        startButton?.title = texts.start
-        stopButton?.title = texts.stop
-        webButton?.title = texts.webUI
-        launchAtLoginCheckbox?.title = texts.launchAtLogin
-        autoStartCheckbox?.title = texts.autoStartServer
-        showSpeedCheckbox?.title = texts.showSpeed
-        hideDockCheckbox?.title = texts.hideDockIcon
-        languageLabel?.stringValue = texts.languageLabel
-        languageControl?.setLabel(texts.russian, forSegment: 0)
-        languageControl?.setLabel(texts.english, forSegment: 1)
-        languageControl?.selectedSegment = language == .russian ? 0 : 1
+        mainWindowModel.language = language
 
         showWindowMenuItem?.title = texts.showWindow
         startMenuItem?.title = texts.start
@@ -1424,7 +1236,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
                 menuStatus: texts.launchError,
                 statusIconColor: .systemGray
             )
-            statusLabel.toolTip = message
         }
     }
 
@@ -1456,25 +1267,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         menuStatus: String,
         statusIconColor: NSColor
     ) {
-        statusDot.color = dotColor
-        statusLabel.stringValue = statusText
-        statusLabel.toolTip = statusText
-
-        startButton.isEnabled = canStart
-        stopButton.isEnabled = canStop
-        webButton.isEnabled = canOpenWeb
-        browseButton.isEnabled = canBrowse
-        downloadButton.isEnabled = canDownload
-        pathField.isEnabled = canEditPath
-
-        launchAtLoginCheckbox.state = launchAtLoginController.isEnabled ? .on : .off
-        autoStartCheckbox.state = UserDefaults.standard.bool(forKey: autoStartServerKey)
-            ? .on
-            : .off
-        showSpeedCheckbox.state = isSpeedDisplayEnabled ? .on : .off
-        hideDockCheckbox.state = UserDefaults.standard.bool(forKey: hideDockIconKey)
-            ? .on
-            : .off
+        mainWindowModel.statusKind = mainStatusKind(for: dotColor)
+        mainWindowModel.statusText = statusText
+        mainWindowModel.canStart = canStart
+        mainWindowModel.canStop = canStop
+        mainWindowModel.canOpenWeb = canOpenWeb
+        mainWindowModel.canBrowse = canBrowse
+        mainWindowModel.canDownload = canDownload
+        mainWindowModel.canEditPath = canEditPath
+        mainWindowModel.launchAtLogin = launchAtLoginController.isEnabled
+        mainWindowModel.autoStartServer = UserDefaults.standard.bool(forKey: autoStartServerKey)
+        mainWindowModel.showSpeed = isSpeedDisplayEnabled
+        mainWindowModel.hideDockIcon = UserDefaults.standard.bool(forKey: hideDockIconKey)
 
         statusMenuItem.title = menuStatus
         startMenuItem.isEnabled = canStart
@@ -1488,42 +1292,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         refreshSpeedDisplay()
     }
 
+    private func mainStatusKind(for color: NSColor) -> MainStatusKind {
+        if color == .systemGreen {
+            return .running
+        }
+        if color == .systemOrange {
+            return .working
+        }
+        if color == .systemRed {
+            return .failed
+        }
+        return .stopped
+    }
+
     private func makeMenuBarImage(color: NSColor) -> NSImage {
-        let size = NSSize(width: 18, height: 18)
+        let size = NSSize(width: 20, height: 20)
         let image = NSImage(size: size)
         image.lockFocus()
 
-        let rect = NSRect(x: 2, y: 2, width: 14, height: 14)
+        let rect = NSRect(x: 0.75, y: 0.75, width: 18.5, height: 18.5)
         color.setFill()
         NSBezierPath(ovalIn: rect).fill()
 
-        if let glyph = loadMenuBarGlyph() {
-            glyph.draw(
-                in: NSRect(x: 5.25, y: 4.5, width: 7.5, height: 9),
-                from: .zero,
-                operation: .sourceOver,
-                fraction: 1
-            )
-        }
+        NSColor.white.setFill()
+        let bolt = NSBezierPath()
+        bolt.move(to: NSPoint(x: 11.25, y: 18))
+        bolt.line(to: NSPoint(x: 4.8, y: 9.7))
+        bolt.line(to: NSPoint(x: 9.1, y: 9.7))
+        bolt.line(to: NSPoint(x: 7.2, y: 2.1))
+        bolt.line(to: NSPoint(x: 15.3, y: 11.2))
+        bolt.line(to: NSPoint(x: 10.8, y: 11.2))
+        bolt.close()
+        bolt.fill()
 
         image.unlockFocus()
         image.isTemplate = false
         return image
-    }
-
-    private func loadMenuBarGlyph() -> NSImage? {
-        if let menuBarGlyph {
-            return menuBarGlyph
-        }
-
-        let bundleURL = Bundle.main.url(forResource: "MenuBarGlyph", withExtension: "png")
-        let developmentURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-            .appendingPathComponent(
-                "Resources/AppIcon.iconset/TorrServeGUI.icon/Assets/element2 MacOS.png"
-            )
-        let url = bundleURL ?? developmentURL
-        menuBarGlyph = NSImage(contentsOf: url)
-        return menuBarGlyph
     }
 
     private func refreshSpeedDisplay() {

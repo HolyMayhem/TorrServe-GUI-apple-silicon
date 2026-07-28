@@ -10,7 +10,7 @@ MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 GENERATED_DIR="$PROJECT_DIR/build/generated"
 GENERATED_ICONSET="$GENERATED_DIR/AppIcon.iconset"
-GENERATED_ICNS="$GENERATED_DIR/AppIcon.icns"
+GENERATED_ICNS="$GENERATED_DIR/AppIconDark.icns"
 
 find "$PROJECT_DIR/Resources" -name ".DS_Store" -type f -delete
 
@@ -28,9 +28,7 @@ iconutil -c icns "$GENERATED_ICONSET" -o "$GENERATED_ICNS"
 cp "$BIN_DIR/TorrServerManager" "$MACOS_DIR/TorrServerManager"
 cp "$PROJECT_DIR/Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
 cp "$PROJECT_DIR/Resources/PkgInfo" "$CONTENTS_DIR/PkgInfo"
-cp "$GENERATED_ICNS" "$RESOURCES_DIR/AppIcon.icns"
-cp "$PROJECT_DIR/Resources/AppIcon.iconset/TorrServeGUI.icon/Assets/element2 MacOS.png" \
-  "$RESOURCES_DIR/MenuBarGlyph.png"
+cp "$GENERATED_ICNS" "$RESOURCES_DIR/AppIconDark.icns"
 
 chflags -R nohidden "$APP_PATH" 2>/dev/null || true
 xattr -cr "$APP_PATH" 2>/dev/null || true

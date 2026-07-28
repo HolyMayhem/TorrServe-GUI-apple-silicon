@@ -98,9 +98,9 @@ func darkened(
     _ color: (Double, Double, Double, Double)
 ) -> (Double, Double, Double, Double) {
     (
-        max(0, color.0 * 0.62),
-        max(0, color.1 * 0.62),
-        max(0, color.2 * 0.62),
+        max(0, color.0 * 0.28),
+        max(0, color.1 * 0.28),
+        max(0, color.2 * 0.28),
         color.3
     )
 }
