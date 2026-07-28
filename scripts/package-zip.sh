@@ -8,10 +8,12 @@ ZIP_PATH="$OUTPUT_DIR/TorrServer-macOS-arm64.zip"
 
 mkdir -p "$OUTPUT_DIR"
 rm -f "$ZIP_PATH"
-COPYFILE_DISABLE=1 ditto -c -k --norsrc --keepParent "$APP_PATH" "$ZIP_PATH"
-chflags nohidden "$APP_PATH"
+chflags -R nohidden "$APP_PATH" 2>/dev/null || true
+xattr -cr "$APP_PATH" 2>/dev/null || true
 xattr -d com.apple.FinderInfo "$APP_PATH" 2>/dev/null || true
 codesign --force --sign - --deep "$APP_PATH" >/dev/null
+xattr -cr "$APP_PATH" 2>/dev/null || true
 xattr -d com.apple.FinderInfo "$APP_PATH" 2>/dev/null || true
+COPYFILE_DISABLE=1 ditto -c -k --norsrc --keepParent "$APP_PATH" "$ZIP_PATH"
 
 echo "$ZIP_PATH"

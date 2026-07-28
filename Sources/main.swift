@@ -5,6 +5,7 @@ private let webUIURL = URL(string: "http://localhost:8090")!
 private let savedPathKey = "TorrServerExecutablePath"
 private let autoStartServerKey = "AutoStartServerOnLaunch"
 private let showSpeedInMenuBarKey = "ShowSpeedInMenuBar"
+private let hideDockIconKey = "HideDockIcon"
 private let languageKey = "AppLanguage"
 
 final class StatusDotView: NSView {
@@ -71,6 +72,11 @@ struct Texts {
         language == .russian
             ? "Показывать скорость в меню баре"
             : "Show speed in menu bar"
+    }
+    var hideDockIcon: String {
+        language == .russian
+            ? "Только меню бар, без значка в Dock"
+            : "Menu bar only, hide Dock icon"
     }
     var languageLabel: String { language == .russian ? "Язык" : "Language" }
     var russian: String { "Russian" }
@@ -438,10 +444,6 @@ final class TorrServerSpeedMonitor {
     private var previousSample: (bytes: Int64, date: Date)?
     private var isRequestInFlight = false
 
-    var isRunning: Bool {
-        timer != nil
-    }
-
     func start() {
         guard timer == nil else { return }
 
@@ -637,15 +639,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
     private var launchAtLoginCheckbox: NSButton!
     private var autoStartCheckbox: NSButton!
     private var showSpeedCheckbox: NSButton!
+    private var hideDockCheckbox: NSButton!
     private var languageLabel: NSTextField!
     private var languageControl: NSSegmentedControl!
+    private var menuBarGlyph: NSImage?
 
     private var statusItem: NSStatusItem!
     private var statusMenuItem: NSMenuItem!
     private var speedMenuItem: NSMenuItem!
     private var materialsHeaderMenuItem: NSMenuItem!
     private var materialMenuItems: [NSMenuItem] = []
-    private var moreMaterialsMenuItem: NSMenuItem!
     private var materialsSeparatorMenuItem: NSMenuItem!
     private var showWindowMenuItem: NSMenuItem!
     private var startMenuItem: NSMenuItem!
@@ -664,6 +667,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         registerDefaultSettings()
+        applyActivationPolicy()
         buildMainMenu()
         buildStatusItem()
         buildWindow()
@@ -838,6 +842,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         updateUI(for: processController.state)
     }
 
+    @objc private func toggleHideDockIcon(_ sender: NSButton) {
+        UserDefaults.standard.set(sender.state == .on, forKey: hideDockIconKey)
+        applyActivationPolicy()
+        updateUI(for: processController.state)
+    }
+
     @objc private func changeLanguage(_ sender: NSSegmentedControl) {
         currentLanguage = sender.selectedSegment == 0 ? .russian : .english
         applyLanguage()
@@ -898,22 +908,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
 
     private func registerDefaultSettings() {
         UserDefaults.standard.register(defaults: [
-            showSpeedInMenuBarKey: true
+            showSpeedInMenuBarKey: true,
+            hideDockIconKey: false
         ])
+    }
+
+    private func applyActivationPolicy() {
+        let shouldHideDockIcon = UserDefaults.standard.bool(forKey: hideDockIconKey)
+        NSApp.setActivationPolicy(shouldHideDockIcon ? .accessory : .regular)
     }
 
     private func buildWindow() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 356),
+            contentRect: NSRect(x: 0, y: 0, width: 540, height: 390),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
         window.title = "TorrServer"
         window.isReleasedWhenClosed = false
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+        window.backgroundColor = .clear
 
-        let contentView = NSView()
+        let contentView = NSVisualEffectView()
         contentView.translatesAutoresizingMaskIntoConstraints = false
+        contentView.material = .hudWindow
+        contentView.blendingMode = .behindWindow
+        contentView.state = .active
         window.contentView = contentView
 
         titleLabel = NSTextField(labelWithString: "TorrServer")
@@ -935,6 +957,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         pathField.delegate = self
         pathField.lineBreakMode = .byTruncatingMiddle
         pathField.setAccessibilityLabel("Путь к исполняемому файлу TorrServer")
+        pathField.controlSize = .large
 
         browseButton = NSButton(
             title: "Выбрать",
@@ -942,6 +965,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
             action: #selector(chooseExecutable(_:))
         )
         browseButton.bezelStyle = .rounded
+        browseButton.controlSize = .large
 
         downloadButton = NSButton(
             title: "Скачать ARM",
@@ -949,6 +973,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
             action: #selector(downloadLatestTorrServer(_:))
         )
         downloadButton.bezelStyle = .rounded
+        downloadButton.controlSize = .large
 
         startButton = NSButton(
             title: "Запустить",
@@ -956,6 +981,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
             action: #selector(startServer(_:))
         )
         startButton.bezelStyle = .rounded
+        startButton.controlSize = .large
         startButton.keyEquivalent = "\r"
 
         stopButton = NSButton(
@@ -964,6 +990,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
             action: #selector(stopServer(_:))
         )
         stopButton.bezelStyle = .rounded
+        stopButton.controlSize = .large
 
         webButton = NSButton(
             title: "Web UI",
@@ -971,6 +998,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
             action: #selector(openWebUI(_:))
         )
         webButton.bezelStyle = .rounded
+        webButton.controlSize = .large
 
         launchAtLoginCheckbox = NSButton(
             checkboxWithTitle: "Открывать при входе в macOS",
@@ -997,6 +1025,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         showSpeedCheckbox.font = .systemFont(ofSize: 12)
         showSpeedCheckbox.state = isSpeedDisplayEnabled ? .on : .off
 
+        hideDockCheckbox = NSButton(
+            checkboxWithTitle: "Только меню бар, без значка в Dock",
+            target: self,
+            action: #selector(toggleHideDockIcon(_:))
+        )
+        hideDockCheckbox.font = .systemFont(ofSize: 12)
+        hideDockCheckbox.state = UserDefaults.standard.bool(forKey: hideDockIconKey)
+            ? .on
+            : .off
+
         languageLabel = NSTextField(labelWithString: "Language")
         languageLabel.font = .systemFont(ofSize: 12, weight: .medium)
         languageLabel.textColor = .secondaryLabelColor
@@ -1007,7 +1045,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
             target: self,
             action: #selector(changeLanguage(_:))
         )
-        languageControl.segmentStyle = .rounded
+        languageControl.segmentStyle = .capsule
+        languageControl.controlSize = .large
         languageControl.selectedSegment = currentLanguage == .russian ? 0 : 1
 
         let pathButtonsStack = NSStackView(views: [browseButton, downloadButton])
@@ -1023,7 +1062,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         [
             titleLabel, statusStack, pathField, pathButtonsStack,
             actionStack, launchAtLoginCheckbox, autoStartCheckbox,
-            showSpeedCheckbox, languageLabel, languageControl
+            showSpeedCheckbox, hideDockCheckbox, languageLabel, languageControl
         ].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
             contentView.addSubview($0)
@@ -1064,13 +1103,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
             showSpeedCheckbox.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             showSpeedCheckbox.trailingAnchor.constraint(equalTo: pathField.trailingAnchor),
 
-            languageLabel.topAnchor.constraint(equalTo: showSpeedCheckbox.bottomAnchor, constant: 16),
+            hideDockCheckbox.topAnchor.constraint(equalTo: showSpeedCheckbox.bottomAnchor, constant: 6),
+            hideDockCheckbox.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            hideDockCheckbox.trailingAnchor.constraint(equalTo: pathField.trailingAnchor),
+
+            languageLabel.topAnchor.constraint(equalTo: hideDockCheckbox.bottomAnchor, constant: 18),
             languageLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             languageLabel.centerYAnchor.constraint(equalTo: languageControl.centerYAnchor),
 
-            languageControl.topAnchor.constraint(equalTo: showSpeedCheckbox.bottomAnchor, constant: 12),
+            languageControl.topAnchor.constraint(equalTo: hideDockCheckbox.bottomAnchor, constant: 12),
             languageControl.trailingAnchor.constraint(equalTo: pathField.trailingAnchor),
-            languageControl.widthAnchor.constraint(equalToConstant: 190)
+            languageControl.widthAnchor.constraint(equalToConstant: 220),
+            languageControl.heightAnchor.constraint(equalToConstant: 28)
         ])
     }
 
@@ -1120,8 +1164,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
             keyEquivalent: ""
         )
         materialsHeaderMenuItem.isEnabled = false
-        moreMaterialsMenuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-        moreMaterialsMenuItem.isEnabled = false
         materialsSeparatorMenuItem = .separator()
 
         showWindowMenuItem = NSMenuItem(
@@ -1216,6 +1258,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         launchAtLoginCheckbox?.title = texts.launchAtLogin
         autoStartCheckbox?.title = texts.autoStartServer
         showSpeedCheckbox?.title = texts.showSpeed
+        hideDockCheckbox?.title = texts.hideDockIcon
         languageLabel?.stringValue = texts.languageLabel
         languageControl?.setLabel(texts.russian, forSegment: 0)
         languageControl?.setLabel(texts.english, forSegment: 1)
@@ -1429,6 +1472,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
             ? .on
             : .off
         showSpeedCheckbox.state = isSpeedDisplayEnabled ? .on : .off
+        hideDockCheckbox.state = UserDefaults.standard.bool(forKey: hideDockIconKey)
+            ? .on
+            : .off
 
         statusMenuItem.title = menuStatus
         startMenuItem.isEnabled = canStart
@@ -1451,21 +1497,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         color.setFill()
         NSBezierPath(ovalIn: rect).fill()
 
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.alignment = .center
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10, weight: .heavy),
-            .foregroundColor: NSColor.white,
-            .paragraphStyle: paragraphStyle
-        ]
-        NSString(string: "T").draw(
-            in: NSRect(x: 2, y: 3, width: 14, height: 12),
-            withAttributes: attributes
-        )
+        if let glyph = loadMenuBarGlyph() {
+            glyph.draw(
+                in: NSRect(x: 5.25, y: 4.5, width: 7.5, height: 9),
+                from: .zero,
+                operation: .sourceOver,
+                fraction: 1
+            )
+        }
 
         image.unlockFocus()
         image.isTemplate = false
         return image
+    }
+
+    private func loadMenuBarGlyph() -> NSImage? {
+        if let menuBarGlyph {
+            return menuBarGlyph
+        }
+
+        let bundleURL = Bundle.main.url(forResource: "MenuBarGlyph", withExtension: "png")
+        let developmentURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent(
+                "Resources/AppIcon.iconset/TorrServeGUI.icon/Assets/element2 MacOS.png"
+            )
+        let url = bundleURL ?? developmentURL
+        menuBarGlyph = NSImage(contentsOf: url)
+        return menuBarGlyph
     }
 
     private func refreshSpeedDisplay() {
@@ -1541,6 +1599,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
 
 let app = NSApplication.shared
 let appDelegate = AppDelegate()
-app.setActivationPolicy(.regular)
 app.delegate = appDelegate
 app.run()
