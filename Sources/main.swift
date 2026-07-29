@@ -832,10 +832,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func showAboutPanel(_ sender: Any?) {
         let version = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"
-        ) as? String ?? "1.9"
+        ) as? String ?? "1.9.1"
         let build = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleVersion"
-        ) as? String ?? "10"
+        ) as? String ?? "11"
         let credits = NSAttributedString(
             string: texts.aboutCredits,
             attributes: [
@@ -904,7 +904,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func buildWindow() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 580, height: 570),
+            contentRect: NSRect(x: 0, y: 0, width: 580, height: 500),
             styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -918,8 +918,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         window.backgroundColor = .clear
         window.isOpaque = false
         window.hasShadow = true
-        window.contentMinSize = NSSize(width: 580, height: 570)
-        window.contentMaxSize = NSSize(width: 580, height: 570)
         window.standardWindowButton(.zoomButton)?.isEnabled = false
 
         mainWindowModel.path = UserDefaults.standard.string(forKey: savedPathKey) ?? ""
@@ -950,9 +948,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.setLanguage(language)
         }
 
-        window.contentView = NSHostingView(
+        let hostingView = NSHostingView(
             rootView: MainWindowView(model: mainWindowModel)
         )
+        window.contentView = hostingView
+        hostingView.layoutSubtreeIfNeeded()
+
+        let fixedContentSize = hostingView.fittingSize
+        window.setContentSize(fixedContentSize)
+        window.contentMinSize = fixedContentSize
+        window.contentMaxSize = fixedContentSize
     }
 
     private func buildMainMenu() {

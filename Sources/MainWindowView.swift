@@ -93,11 +93,12 @@ struct MainWindowView: View {
                 actionSection
                 settingsSection
             }
-            .padding(.horizontal, 18)
-            .padding(.top, 10)
-            .padding(.bottom, 18)
+            .frame(maxWidth: .infinity, alignment: .top)
+            .padding(.horizontal, 17)
+            .padding(.top, 6)
+            .padding(.bottom, 17)
         }
-        .frame(width: 580, height: 570)
+        .frame(width: 580)
     }
 
     private var header: some View {
