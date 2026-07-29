@@ -61,8 +61,8 @@ struct Texts {
     }
     var hideDockIcon: String {
         language == .russian
-            ? "Только меню бар, без значка в Dock"
-            : "Menu bar only, hide Dock icon"
+            ? "Показывать приложение только в меню баре"
+            : "Show app in menu bar only"
     }
     var languageLabel: String { language == .russian ? "Язык" : "Language" }
     var russian: String { "Russian" }
@@ -818,7 +818,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setHideDockIcon(_ enabled: Bool) {
         UserDefaults.standard.set(enabled, forKey: hideDockIconKey)
-        applyActivationPolicy()
+        applyActivationPolicy(keepingWindowVisible: true)
         updateUI(for: processController.state)
     }
 
@@ -832,10 +832,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func showAboutPanel(_ sender: Any?) {
         let version = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"
-        ) as? String ?? "1.8"
+        ) as? String ?? "1.9"
         let build = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleVersion"
-        ) as? String ?? "9"
+        ) as? String ?? "10"
         let credits = NSAttributedString(
             string: texts.aboutCredits,
             attributes: [
@@ -887,15 +887,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ])
     }
 
-    private func applyActivationPolicy() {
+    private func applyActivationPolicy(keepingWindowVisible: Bool = false) {
         let shouldHideDockIcon = UserDefaults.standard.bool(forKey: hideDockIconKey)
+        let shouldRestoreWindow = keepingWindowVisible && window?.isVisible == true
         NSApp.setActivationPolicy(shouldHideDockIcon ? .accessory : .regular)
+
+        guard shouldRestoreWindow else { return }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.window != nil else { return }
+            NSApp.activate(ignoringOtherApps: true)
+            self.window.orderFrontRegardless()
+            self.window.makeKey()
+        }
     }
 
     private func buildWindow() {
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 580, height: 570),
-            styleMask: [.titled, .closable, .miniaturizable],
+            styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -905,8 +915,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         window.titleVisibility = .hidden
         window.titlebarSeparatorStyle = .none
         window.isMovableByWindowBackground = true
-        window.backgroundColor = .windowBackgroundColor
-        window.isOpaque = true
+        window.backgroundColor = .clear
+        window.isOpaque = false
+        window.hasShadow = true
         window.contentMinSize = NSSize(width: 580, height: 570)
         window.contentMaxSize = NSSize(width: 580, height: 570)
         window.standardWindowButton(.zoomButton)?.isEnabled = false

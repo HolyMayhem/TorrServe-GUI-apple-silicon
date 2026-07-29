@@ -61,14 +61,29 @@ struct MainWindowView: View {
 
     var body: some View {
         ZStack {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .ignoresSafeArea()
+
             LinearGradient(
                 colors: [
-                    Color(nsColor: .windowBackgroundColor),
-                    Color.green.opacity(0.055),
-                    Color(nsColor: .windowBackgroundColor)
+                    Color(nsColor: .windowBackgroundColor).opacity(0.34),
+                    Color.green.opacity(0.045),
+                    Color(nsColor: .windowBackgroundColor).opacity(0.22)
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            RadialGradient(
+                colors: [
+                    Color.white.opacity(0.045),
+                    Color.clear
+                ],
+                center: .topLeading,
+                startRadius: 0,
+                endRadius: 360
             )
             .ignoresSafeArea()
 
