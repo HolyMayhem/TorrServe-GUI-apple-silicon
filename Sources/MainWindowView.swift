@@ -72,18 +72,17 @@ struct MainWindowView: View {
             )
             .ignoresSafeArea()
 
-            ScrollView {
-                VStack(spacing: 14) {
-                    header
-                    executableSection
-                    actionSection
-                    settingsSection
-                }
-                .padding(22)
-                .frame(maxWidth: 620)
+            VStack(spacing: 12) {
+                header
+                executableSection
+                actionSection
+                settingsSection
             }
+            .padding(.horizontal, 18)
+            .padding(.top, 10)
+            .padding(.bottom, 18)
         }
-        .frame(minWidth: 530, minHeight: 470)
+        .frame(width: 580, height: 570)
     }
 
     private var header: some View {
@@ -285,58 +284,35 @@ private struct GlassToggleRow: View {
     let onChange: (Bool) -> Void
 
     var body: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.22)) {
-                onChange(!isOn)
-            }
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: systemImage)
-                    .foregroundStyle(isOn ? .green : .secondary)
-                    .frame(width: 18)
+        HStack(spacing: 10) {
+            Image(systemName: systemImage)
+                .foregroundStyle(isOn ? Color.accentColor : Color.secondary)
+                .frame(width: 18)
 
-                Text(title)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.primary)
+            Text(title)
+                .font(.system(size: 13))
+                .foregroundStyle(.primary)
 
-                Spacer(minLength: 12)
+            Spacer(minLength: 12)
 
-                GlassSwitchTrack(isOn: isOn)
-            }
-            .contentShape(Rectangle())
-            .padding(.vertical, 6)
+            Toggle(
+                "",
+                isOn: Binding(
+                    get: { isOn },
+                    set: { newValue in
+                        withAnimation(.easeInOut(duration: 0.22)) {
+                            onChange(newValue)
+                        }
+                    }
+                )
+            )
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .accessibilityLabel(title)
         }
-        .buttonStyle(.plain)
-        .accessibilityValue(isOn ? "On" : "Off")
-    }
-}
-
-private struct GlassSwitchTrack: View {
-    let isOn: Bool
-
-    var body: some View {
-        ZStack(alignment: isOn ? .trailing : .leading) {
-            if #available(macOS 26.0, *) {
-                Capsule()
-                    .fill(isOn ? Color.green.opacity(0.24) : Color.white.opacity(0.035))
-                    .glassEffect(
-                        .regular
-                            .tint(isOn ? Color.green.opacity(0.55) : Color.gray.opacity(0.16))
-                            .interactive(),
-                        in: Capsule()
-                    )
-            } else {
-                Capsule()
-                    .fill(isOn ? Color.green.opacity(0.75) : Color.secondary.opacity(0.25))
-                    .overlay(Capsule().stroke(.white.opacity(0.14), lineWidth: 0.5))
-            }
-
-            Circle()
-                .fill(.white)
-                .shadow(color: .black.opacity(0.22), radius: 2, y: 1)
-                .padding(3)
-        }
-        .frame(width: 46, height: 26)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 3)
     }
 }
 
@@ -347,36 +323,68 @@ private struct GlassLanguagePicker: View {
     let onChange: (AppLanguage) -> Void
 
     var body: some View {
-        HStack(spacing: 4) {
-            languageButton(title: russianTitle, value: .russian)
-            languageButton(title: englishTitle, value: .english)
+        Button {
+            withAnimation(.easeInOut(duration: 0.24)) {
+                onChange(language == .russian ? .english : .russian)
+            }
+        } label: {
+            ZStack(alignment: language == .russian ? .leading : .trailing) {
+                languageTrack
+
+                languageThumb
+                    .padding(3)
+
+                HStack(spacing: 0) {
+                    languageLabel(russianTitle, value: .russian)
+                    languageLabel(englishTitle, value: .english)
+                }
+            }
+            .frame(width: 180, height: 28)
+            .contentShape(Capsule())
         }
-        .padding(3)
-        .adaptiveGlass(in: Capsule())
+        .buttonStyle(.plain)
+        .accessibilityLabel(
+            language == .russian ? russianTitle : englishTitle
+        )
+        .accessibilityHint(
+            language == .russian ? englishTitle : russianTitle
+        )
     }
 
     @ViewBuilder
-    private func languageButton(title: String, value: AppLanguage) -> some View {
-        let isSelected = language == value
-
-        Button {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                onChange(value)
-            }
-        } label: {
-            Text(title)
-                .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
-                .frame(minWidth: 70)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 5)
-                .background {
-                    if isSelected {
-                        Capsule()
-                            .fill(Color.green.opacity(0.22))
-                    }
-                }
+    private var languageTrack: some View {
+        if #available(macOS 26.0, *) {
+            Capsule()
+                .fill(Color.secondary.opacity(0.10))
+                .glassEffect(.regular.interactive(), in: Capsule())
+        } else {
+            Capsule()
+                .fill(Color.secondary.opacity(0.18))
+                .overlay(Capsule().stroke(.white.opacity(0.12), lineWidth: 0.5))
         }
-        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var languageThumb: some View {
+        let thumb = Capsule()
+            .fill(Color.accentColor.opacity(0.72))
+            .frame(width: 84, height: 22)
+
+        if #available(macOS 26.0, *) {
+            thumb.glassEffect(
+                .regular.tint(Color.accentColor.opacity(0.45)).interactive(),
+                in: Capsule()
+            )
+        } else {
+            thumb.shadow(color: .black.opacity(0.18), radius: 2, y: 1)
+        }
+    }
+
+    private func languageLabel(_ title: String, value: AppLanguage) -> some View {
+        Text(title)
+            .font(.system(size: 11.5, weight: language == value ? .semibold : .regular))
+            .foregroundStyle(language == value ? Color.white : Color.secondary)
+            .frame(maxWidth: .infinity)
     }
 }
 

@@ -69,13 +69,8 @@ func gradientColors(
     let baseFill = layer["fill"] as? [String: Any]
     let fill = specializedFill ?? baseFill
     let gradient = fill?["linear-gradient"] as? [String] ?? []
-    var top = parseDisplayP3(gradient.first) ?? (0.25, 0.70, 0.30, 1)
-    var bottom = parseDisplayP3(gradient.dropFirst().first) ?? top
-
-    if preferredAppearance == "dark", specializedFill == nil, baseFill != nil {
-        top = darkened(top)
-        bottom = darkened(bottom)
-    }
+    let top = parseDisplayP3(gradient.first) ?? (0.25, 0.70, 0.30, 1)
+    let bottom = parseDisplayP3(gradient.dropFirst().first) ?? top
 
     return (top, bottom)
 }
@@ -94,17 +89,6 @@ func fillSpecialization(
     return specializations.first?["value"] as? [String: Any]
 }
 
-func darkened(
-    _ color: (Double, Double, Double, Double)
-) -> (Double, Double, Double, Double) {
-    (
-        max(0, color.0 * 0.28),
-        max(0, color.1 * 0.28),
-        max(0, color.2 * 0.28),
-        color.3
-    )
-}
-
 func parseDisplayP3(_ value: String?) -> (Double, Double, Double, Double)? {
     guard let value, let payload = value.split(separator: ":").last else { return nil }
     let components = payload.split(separator: ",").compactMap { Double($0) }
@@ -120,6 +104,7 @@ func parseDisplayP3(_ value: String?) -> (Double, Double, Double, Double)? {
 func renderIcon(specs: [LayerSpec], assetsDirectory: URL) throws -> PixelBuffer {
     let size = 1024
     var canvas = PixelBuffer(width: size, height: size, bytes: Array(repeating: 0, count: size * size * 4))
+    fillSystemDarkBackground(into: &canvas)
 
     for spec in specs {
         let mask = try loadRGBAImage(
@@ -130,6 +115,25 @@ func renderIcon(specs: [LayerSpec], assetsDirectory: URL) throws -> PixelBuffer 
 
     applySuperellipseMask(to: &canvas)
     return canvas
+}
+
+func fillSystemDarkBackground(into canvas: inout PixelBuffer) {
+    for y in 0..<canvas.height {
+        let t = Double(y) / Double(canvas.height - 1)
+        let top = (0.16, 0.16, 0.17)
+        let bottom = (0.025, 0.028, 0.032)
+        let red = top.0 + (bottom.0 - top.0) * t
+        let green = top.1 + (bottom.1 - top.1) * t
+        let blue = top.2 + (bottom.2 - top.2) * t
+
+        for x in 0..<canvas.width {
+            let index = (y * canvas.width + x) * 4
+            canvas.bytes[index] = UInt8(clamping: Int(round(red * 255)))
+            canvas.bytes[index + 1] = UInt8(clamping: Int(round(green * 255)))
+            canvas.bytes[index + 2] = UInt8(clamping: Int(round(blue * 255)))
+            canvas.bytes[index + 3] = 255
+        }
+    }
 }
 
 func loadRGBAImage(at url: URL) throws -> PixelBuffer {

@@ -832,10 +832,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func showAboutPanel(_ sender: Any?) {
         let version = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"
-        ) as? String ?? "1.3"
+        ) as? String ?? "1.8"
         let build = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleVersion"
-        ) as? String ?? "4"
+        ) as? String ?? "9"
         let credits = NSAttributedString(
             string: texts.aboutCredits,
             attributes: [
@@ -894,20 +894,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func buildWindow() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 580, height: 540),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            contentRect: NSRect(x: 0, y: 0, width: 580, height: 570),
+            styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
         window.title = "TorrServer"
         window.isReleasedWhenClosed = false
-        window.titlebarAppearsTransparent = false
-        window.titleVisibility = .visible
-        window.isMovableByWindowBackground = false
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.titlebarSeparatorStyle = .none
+        window.isMovableByWindowBackground = true
         window.backgroundColor = .windowBackgroundColor
         window.isOpaque = true
-        window.collectionBehavior.insert(.fullScreenPrimary)
-        window.minSize = NSSize(width: 530, height: 500)
+        window.contentMinSize = NSSize(width: 580, height: 570)
+        window.contentMaxSize = NSSize(width: 580, height: 570)
+        window.standardWindowButton(.zoomButton)?.isEnabled = false
 
         mainWindowModel.path = UserDefaults.standard.string(forKey: savedPathKey) ?? ""
         mainWindowModel.language = currentLanguage

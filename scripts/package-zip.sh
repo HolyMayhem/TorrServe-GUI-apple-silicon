@@ -15,5 +15,8 @@ codesign --force --sign - --deep "$APP_PATH" >/dev/null
 xattr -cr "$APP_PATH" 2>/dev/null || true
 xattr -d com.apple.FinderInfo "$APP_PATH" 2>/dev/null || true
 COPYFILE_DISABLE=1 ditto -c -k --norsrc --keepParent "$APP_PATH" "$ZIP_PATH"
+chflags -R nohidden "$APP_PATH" 2>/dev/null || true
+xattr -cr "$APP_PATH" 2>/dev/null || true
+xattr -d com.apple.FinderInfo "$APP_PATH" 2>/dev/null || true
 
 echo "$ZIP_PATH"
