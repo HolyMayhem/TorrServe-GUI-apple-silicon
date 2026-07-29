@@ -38,6 +38,8 @@ final class MainWindowModel: ObservableObject {
     @Published var autoStartServer = false
     @Published var showSpeed = true
     @Published var hideDockIcon = false
+    @Published var notificationsEnabled = false
+    @Published var speedUnit: SpeedDisplayUnit = .automatic
 
     var onPathChanged: ((String) -> Void)?
     var onChoose: (() -> Void)?
@@ -49,6 +51,8 @@ final class MainWindowModel: ObservableObject {
     var onAutoStartChanged: ((Bool) -> Void)?
     var onShowSpeedChanged: ((Bool) -> Void)?
     var onHideDockIconChanged: ((Bool) -> Void)?
+    var onNotificationsChanged: ((Bool) -> Void)?
+    var onSpeedUnitChanged: ((SpeedDisplayUnit) -> Void)?
     var onLanguageChanged: ((AppLanguage) -> Void)?
 }
 
@@ -235,8 +239,31 @@ struct MainWindowView: View {
                 onChange: { model.onHideDockIconChanged?($0) }
             )
 
+            GlassToggleRow(
+                title: texts.notifications,
+                systemImage: "bell.badge",
+                isOn: model.notificationsEnabled,
+                onChange: { model.onNotificationsChanged?($0) }
+            )
+
             Divider()
                 .padding(.vertical, 8)
+
+            HStack {
+                Label(texts.speedFormat, systemImage: "speedometer")
+                    .font(.system(size: 13, weight: .medium))
+
+                Spacer()
+
+                GlassSpeedUnitPicker(
+                    unit: model.speedUnit,
+                    automaticTitle: texts.automaticSpeed,
+                    megabytesTitle: texts.megabytesSpeed,
+                    megabitsTitle: texts.megabitsSpeed,
+                    onChange: { model.onSpeedUnitChanged?($0) }
+                )
+            }
+            .padding(.vertical, 3)
 
             HStack {
                 Label(texts.languageLabel, systemImage: "globe")
@@ -355,7 +382,7 @@ private struct GlassLanguagePicker: View {
                     languageLabel(englishTitle, value: .english)
                 }
             }
-            .frame(width: 180, height: 28)
+            .frame(width: 230, height: 28)
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -384,7 +411,7 @@ private struct GlassLanguagePicker: View {
     private var languageThumb: some View {
         let thumb = Capsule()
             .fill(Color.accentColor.opacity(0.72))
-            .frame(width: 84, height: 22)
+            .frame(width: 112, height: 22)
 
         if #available(macOS 26.0, *) {
             thumb.glassEffect(
@@ -401,6 +428,97 @@ private struct GlassLanguagePicker: View {
             .font(.system(size: 11.5, weight: language == value ? .semibold : .regular))
             .foregroundStyle(language == value ? Color.white : Color.secondary)
             .frame(maxWidth: .infinity)
+    }
+}
+
+private struct GlassSpeedUnitPicker: View {
+    let unit: SpeedDisplayUnit
+    let automaticTitle: String
+    let megabytesTitle: String
+    let megabitsTitle: String
+    let onChange: (SpeedDisplayUnit) -> Void
+
+    private let width: CGFloat = 230
+    private let height: CGFloat = 28
+    private let inset: CGFloat = 3
+
+    private var selectedIndex: Int {
+        switch unit {
+        case .automatic: return 0
+        case .megabytes: return 1
+        case .megabits: return 2
+        }
+    }
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            speedTrack
+
+            GeometryReader { geometry in
+                let segmentWidth = (geometry.size.width - inset * 2) / 3
+
+                speedThumb
+                    .frame(width: segmentWidth, height: height - inset * 2)
+                    .offset(
+                        x: inset + CGFloat(selectedIndex) * segmentWidth,
+                        y: inset
+                    )
+            }
+
+            HStack(spacing: 0) {
+                speedOption(automaticTitle, value: .automatic)
+                speedOption(megabytesTitle, value: .megabytes)
+                speedOption(megabitsTitle, value: .megabits)
+            }
+        }
+        .frame(width: width, height: height)
+        .animation(.easeInOut(duration: 0.24), value: unit)
+    }
+
+    @ViewBuilder
+    private var speedTrack: some View {
+        if #available(macOS 26.0, *) {
+            Capsule()
+                .fill(Color.secondary.opacity(0.10))
+                .glassEffect(.regular.interactive(), in: Capsule())
+        } else {
+            Capsule()
+                .fill(Color.secondary.opacity(0.18))
+                .overlay(Capsule().stroke(.white.opacity(0.12), lineWidth: 0.5))
+        }
+    }
+
+    @ViewBuilder
+    private var speedThumb: some View {
+        let thumb = Capsule()
+            .fill(Color.accentColor.opacity(0.72))
+
+        if #available(macOS 26.0, *) {
+            thumb.glassEffect(
+                .regular.tint(Color.accentColor.opacity(0.45)).interactive(),
+                in: Capsule()
+            )
+        } else {
+            thumb.shadow(color: .black.opacity(0.18), radius: 2, y: 1)
+        }
+    }
+
+    private func speedOption(
+        _ title: String,
+        value: SpeedDisplayUnit
+    ) -> some View {
+        Button {
+            onChange(value)
+        } label: {
+            Text(title)
+                .font(.system(size: 11.5, weight: unit == value ? .semibold : .regular))
+                .foregroundStyle(unit == value ? Color.white : Color.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(unit == value ? .isSelected : [])
     }
 }
 

@@ -1,6 +1,9 @@
 import AppKit
+import CoreImage
+import CoreImage.CIFilterBuiltins
 import Darwin
 import SwiftUI
+import UserNotifications
 
 private let webUIURL = URL(string: "http://localhost:8090")!
 private let savedPathKey = "TorrServerExecutablePath"
@@ -8,6 +11,8 @@ private let autoStartServerKey = "AutoStartServerOnLaunch"
 private let showSpeedInMenuBarKey = "ShowSpeedInMenuBar"
 private let hideDockIconKey = "HideDockIcon"
 private let languageKey = "AppLanguage"
+private let notificationsEnabledKey = "NotificationsEnabled"
+private let speedDisplayUnitKey = "SpeedDisplayUnit"
 
 struct AppError: LocalizedError {
     let message: String
@@ -26,6 +31,12 @@ enum AppLanguage: String {
     static var systemDefault: AppLanguage {
         Locale.current.languageCode == "ru" ? .russian : .english
     }
+}
+
+enum SpeedDisplayUnit: String, CaseIterable {
+    case automatic
+    case megabytes
+    case megabits
 }
 
 struct Texts {
@@ -59,6 +70,15 @@ struct Texts {
             ? "Показывать скорость в меню баре"
             : "Show speed in menu bar"
     }
+    var notifications: String {
+        language == .russian ? "Системные уведомления" : "System notifications"
+    }
+    var speedFormat: String {
+        language == .russian ? "Формат скорости" : "Speed format"
+    }
+    var automaticSpeed: String { language == .russian ? "Авто" : "Auto" }
+    var megabytesSpeed: String { "MB/s" }
+    var megabitsSpeed: String { "Mbit/s" }
     var hideDockIcon: String {
         language == .russian
             ? "Показывать приложение только в меню баре"
@@ -89,6 +109,55 @@ struct Texts {
     var speedOff: String { language == .russian ? "выключена" : "off" }
     var speedNoData: String { language == .russian ? "нет данных" : "no data" }
     var materialsTitle: String { language == .russian ? "Материалы" : "Materials" }
+    var currentMaterial: String {
+        language == .russian ? "Сейчас транслируется" : "Now streaming"
+    }
+    var recentMaterial: String {
+        language == .russian ? "Последний материал" : "Latest material"
+    }
+    var noActiveMaterial: String {
+        language == .russian ? "Нет активной трансляции" : "No active stream"
+    }
+    var buffer: String { language == .russian ? "Буфер" : "Buffer" }
+    var seeds: String { language == .russian ? "Сиды" : "Seeds" }
+    var peers: String { language == .russian ? "Пиры" : "Peers" }
+    var speedHistory: String {
+        language == .russian ? "Скорость за 60 секунд" : "Speed over 60 seconds"
+    }
+    var localWebUI: String {
+        language == .russian ? "Web UI в локальной сети" : "Web UI on local network"
+    }
+    var showQRCode: String {
+        language == .russian ? "Показать QR-код" : "Show QR code"
+    }
+    var hideQRCode: String {
+        language == .russian ? "Скрыть QR-код" : "Hide QR code"
+    }
+    var openWindow: String {
+        language == .russian ? "Открыть приложение" : "Open app"
+    }
+    var serverStartedNotificationTitle: String {
+        language == .russian ? "TorrServer запущен" : "TorrServer started"
+    }
+    var serverStartedNotificationMessage: String {
+        language == .russian
+            ? "Сервер готов к работе на порту 8090."
+            : "The server is ready on port 8090."
+    }
+    var updateInstalledNotificationTitle: String {
+        language == .russian ? "Обновление установлено" : "Update installed"
+    }
+    var errorNotificationTitle: String {
+        language == .russian ? "Ошибка TorrServer" : "TorrServer error"
+    }
+    var notificationPermissionDeniedTitle: String {
+        language == .russian ? "Уведомления недоступны" : "Notifications unavailable"
+    }
+    var notificationPermissionDeniedMessage: String {
+        language == .russian
+            ? "Разрешите уведомления для TorrServer в Системных настройках macOS."
+            : "Allow TorrServer notifications in macOS System Settings."
+    }
     var loadingMaterials: String { language == .russian ? "Загрузка…" : "Loading…" }
     var noMaterials: String { language == .russian ? "Нет материалов" : "No materials" }
     func moreMaterials(_ count: Int) -> String {
@@ -513,15 +582,25 @@ final class TorrServerSpeedMonitor {
 struct TorrentSummary {
     let title: String
     let size: Int64
+    let loadedSize: Int64?
     let seeders: Int
     let activePeers: Int
     let totalPeers: Int
+    let status: Int
     let timestamp: Int64
     let downloadSpeed: Double
     let uploadSpeed: Double
 
     var isActive: Bool {
-        downloadSpeed > 0 || uploadSpeed > 0 || activePeers > 0
+        downloadSpeed > 0
+            || uploadSpeed > 0
+            || activePeers > 0
+            || (1...3).contains(status)
+    }
+
+    var bufferProgress: Double? {
+        guard size > 0, let loadedSize else { return nil }
+        return min(max(Double(loadedSize) / Double(size), 0), 1)
     }
 }
 
@@ -565,20 +644,50 @@ final class TorrServerLibraryClient {
             ?? stringValue(dictionary["name"])
             ?? stringValue(dictionary["hash"])
             ?? "Torrent"
-        let size = int64Value(dictionary["torrent_size"])
-            ?? int64Value(dictionary["loaded_size"])
+        let loadedSize = int64Value(value(in: dictionary, keys: [
+            "loaded_size", "LoadedSize"
+        ]))
+        let size = int64Value(value(in: dictionary, keys: [
+            "torrent_size", "TorrentSize"
+        ]))
+            ?? loadedSize
             ?? 0
 
         return TorrentSummary(
             title: title,
             size: size,
-            seeders: intValue(dictionary["connected_seeders"]),
-            activePeers: intValue(dictionary["active_peers"]),
-            totalPeers: intValue(dictionary["total_peers"]),
-            timestamp: int64Value(dictionary["timestamp"]) ?? 0,
-            downloadSpeed: doubleValue(dictionary["download_speed"]),
-            uploadSpeed: doubleValue(dictionary["upload_speed"])
+            loadedSize: loadedSize,
+            seeders: intValue(value(in: dictionary, keys: [
+                "connected_seeders", "ConnectedSeeders"
+            ])),
+            activePeers: intValue(value(in: dictionary, keys: [
+                "active_peers", "ActivePeers"
+            ])),
+            totalPeers: intValue(value(in: dictionary, keys: [
+                "total_peers", "TotalPeers"
+            ])),
+            status: intValue(value(in: dictionary, keys: [
+                "stat", "Stat"
+            ])),
+            timestamp: int64Value(value(in: dictionary, keys: [
+                "timestamp", "Timestamp"
+            ])) ?? 0,
+            downloadSpeed: doubleValue(value(in: dictionary, keys: [
+                "download_speed", "DownloadSpeed"
+            ])),
+            uploadSpeed: doubleValue(value(in: dictionary, keys: [
+                "upload_speed", "UploadSpeed"
+            ]))
         )
+    }
+
+    private static func value(in dictionary: [String: Any], keys: [String]) -> Any? {
+        for key in keys {
+            if let value = dictionary[key] {
+                return value
+            }
+        }
+        return nil
     }
 
     private static func stringValue(_ value: Any?) -> String? {
@@ -605,36 +714,186 @@ final class TorrServerLibraryClient {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+enum SpeedFormatter {
+    static func string(
+        bytesPerSecond: Double,
+        unit: SpeedDisplayUnit
+    ) -> String {
+        let safeValue = max(bytesPerSecond, 0)
+
+        switch unit {
+        case .automatic:
+            if safeValue >= 1024 * 1024 {
+                return String(format: "%.1f MB/s", safeValue / 1024 / 1024)
+            }
+            return String(format: "%.0f KB/s", safeValue / 1024)
+
+        case .megabytes:
+            return String(format: "%.2f MB/s", safeValue / 1024 / 1024)
+
+        case .megabits:
+            return String(format: "%.1f Mbit/s", safeValue * 8 / 1_000_000)
+        }
+    }
+}
+
+enum QRCodeGenerator {
+    static func image(for string: String, size: CGFloat = 180) -> NSImage? {
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = Data(string.utf8)
+        filter.correctionLevel = "M"
+
+        guard let outputImage = filter.outputImage else { return nil }
+        let scale = max(size / outputImage.extent.width, 1)
+        let scaled = outputImage.transformed(
+            by: CGAffineTransform(scaleX: scale, y: scale)
+        )
+        let context = CIContext(options: [.useSoftwareRenderer: false])
+
+        guard let cgImage = context.createCGImage(scaled, from: scaled.extent) else {
+            return nil
+        }
+
+        return NSImage(
+            cgImage: cgImage,
+            size: NSSize(width: size, height: size)
+        )
+    }
+}
+
+enum LocalWebUIAddress {
+    static func url() -> URL {
+        let address = preferredIPv4Address() ?? "localhost"
+        return URL(string: "http://\(address):8090") ?? webUIURL
+    }
+
+    private static func preferredIPv4Address() -> String? {
+        var interfaces: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&interfaces) == 0, let first = interfaces else {
+            return nil
+        }
+        defer { freeifaddrs(interfaces) }
+
+        var candidates: [(priority: Int, address: String)] = []
+        var pointer: UnsafeMutablePointer<ifaddrs>? = first
+
+        while let current = pointer {
+            defer { pointer = current.pointee.ifa_next }
+
+            guard
+                let addressPointer = current.pointee.ifa_addr,
+                addressPointer.pointee.sa_family == UInt8(AF_INET)
+            else {
+                continue
+            }
+
+            let interfaceName = String(cString: current.pointee.ifa_name)
+            guard interfaceName != "lo0" else { continue }
+
+            var socketAddress = UnsafeRawPointer(addressPointer)
+                .assumingMemoryBound(to: sockaddr_in.self)
+                .pointee
+            var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+
+            guard inet_ntop(
+                AF_INET,
+                &socketAddress.sin_addr,
+                &buffer,
+                socklen_t(INET_ADDRSTRLEN)
+            ) != nil else {
+                continue
+            }
+
+            let address = String(cString: buffer)
+            guard !address.hasPrefix("169.254.") else { continue }
+
+            let priority: Int
+            switch interfaceName {
+            case "en0": priority = 0
+            case "en1": priority = 1
+            default: priority = 2
+            }
+            candidates.append((priority, address))
+        }
+
+        return candidates.sorted { $0.priority < $1.priority }.first?.address
+    }
+}
+
+final class NotificationController: NSObject, UNUserNotificationCenterDelegate {
+    private let center = UNUserNotificationCenter.current()
+
+    override init() {
+        super.init()
+        center.delegate = self
+    }
+
+    func setEnabled(_ enabled: Bool, completion: @escaping (Bool) -> Void) {
+        guard enabled else {
+            UserDefaults.standard.set(false, forKey: notificationsEnabledKey)
+            completion(false)
+            return
+        }
+
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            DispatchQueue.main.async {
+                UserDefaults.standard.set(granted, forKey: notificationsEnabledKey)
+                completion(granted)
+            }
+        }
+    }
+
+    func send(title: String, body: String) {
+        guard UserDefaults.standard.bool(forKey: notificationsEnabledKey) else {
+            return
+        }
+
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+
+        center.add(
+            UNNotificationRequest(
+                identifier: UUID().uuidString,
+                content: content,
+                trigger: nil
+            )
+        )
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private let processController = TorrServerProcessController()
     private let downloader = TorrServerDownloader()
     private let launchAtLoginController = LaunchAtLoginController()
     private let speedMonitor = TorrServerSpeedMonitor()
     private let libraryClient = TorrServerLibraryClient()
+    private let notificationController = NotificationController()
     private let mainWindowModel = MainWindowModel()
+    private let popoverModel = MenuBarPopoverModel()
 
     private var window: NSWindow!
 
     private var statusItem: NSStatusItem!
-    private var statusMenuItem: NSMenuItem!
-    private var speedMenuItem: NSMenuItem!
-    private var materialsHeaderMenuItem: NSMenuItem!
-    private var materialMenuItems: [NSMenuItem] = []
-    private var materialsSeparatorMenuItem: NSMenuItem!
-    private var showWindowMenuItem: NSMenuItem!
-    private var startMenuItem: NSMenuItem!
-    private var stopMenuItem: NSMenuItem!
-    private var openWebMenuItem: NSMenuItem!
-    private var downloadMenuItem: NSMenuItem!
-    private var launchAtLoginMenuItem: NSMenuItem!
-    private var showSpeedMenuItem: NSMenuItem!
-    private var quitMenuItem: NSMenuItem!
+    private var statusPopover: NSPopover!
+    private var popoverRefreshTimer: Timer?
 
     private var isDownloading = false
     private var hasRepliedToTermination = false
     private var currentSpeedBytesPerSecond: Double?
     private var currentStatusIconColor: NSColor = .systemGray
     private var currentTorrents: [TorrentSummary] = []
+    private var speedHistory: [Double] = []
+    private var hasAnnouncedRunningState = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         registerDefaultSettings()
@@ -645,11 +904,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         applyLanguage()
 
         processController.onStateChange = { [weak self] state in
+            self?.handleNotification(for: state)
             self?.updateUI(for: state)
         }
         speedMonitor.onSpeedChange = { [weak self] speed in
-            self?.currentSpeedBytesPerSecond = speed
-            self?.refreshSpeedDisplay()
+            self?.recordSpeedSample(speed)
         }
         updateUI(for: .stopped)
 
@@ -721,11 +980,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     title: self.texts.downloadDoneTitle,
                     message: self.texts.downloadDoneMessage
                 )
+                self.notificationController.send(
+                    title: self.texts.updateInstalledNotificationTitle,
+                    body: self.texts.downloadDoneMessage
+                )
             case .failure(let error):
                 self.updateUI(for: self.processController.state)
                 self.showAlert(
                     title: self.texts.downloadFailedTitle,
                     message: error.localizedDescription
+                )
+                self.notificationController.send(
+                    title: self.texts.errorNotificationTitle,
+                    body: error.localizedDescription
                 )
             }
         }
@@ -769,17 +1036,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    @objc private func toggleLaunchAtLogin(_ sender: Any?) {
-        let nextState: Bool
-        if let checkbox = sender as? NSButton {
-            nextState = checkbox.state == .on
-        } else {
-            nextState = !launchAtLoginController.isEnabled
-        }
-
-        setLaunchAtLogin(nextState)
-    }
-
     private func setLaunchAtLogin(_ enabled: Bool) {
         do {
             try launchAtLoginController.setEnabled(enabled)
@@ -797,22 +1053,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateUI(for: processController.state)
     }
 
-    @objc private func toggleSpeedInMenuBar(_ sender: Any?) {
-        let nextState: Bool
-        if let checkbox = sender as? NSButton {
-            nextState = checkbox.state == .on
-        } else {
-            nextState = !isSpeedDisplayEnabled
-        }
-
-        setSpeedInMenuBar(nextState)
-    }
-
     private func setSpeedInMenuBar(_ enabled: Bool) {
         UserDefaults.standard.set(enabled, forKey: showSpeedInMenuBarKey)
-        if !enabled {
-            currentSpeedBytesPerSecond = nil
-        }
         updateUI(for: processController.state)
     }
 
@@ -826,16 +1068,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         currentLanguage = language
         applyLanguage()
         updateUI(for: processController.state)
-        updateMaterialsMenu(with: currentTorrents)
+        updatePopoverMaterial(with: currentTorrents)
+    }
+
+    private func setNotificationsEnabled(_ enabled: Bool) {
+        notificationController.setEnabled(enabled) { [weak self] granted in
+            guard let self else { return }
+            self.mainWindowModel.notificationsEnabled = granted
+
+            if enabled && !granted {
+                self.showAlert(
+                    title: self.texts.notificationPermissionDeniedTitle,
+                    message: self.texts.notificationPermissionDeniedMessage
+                )
+            }
+        }
+    }
+
+    private func setSpeedDisplayUnit(_ unit: SpeedDisplayUnit) {
+        UserDefaults.standard.set(unit.rawValue, forKey: speedDisplayUnitKey)
+        mainWindowModel.speedUnit = unit
+        refreshSpeedDisplay()
     }
 
     @objc private func showAboutPanel(_ sender: Any?) {
         let version = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"
-        ) as? String ?? "1.9.1"
+        ) as? String ?? "2.0.2"
         let build = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleVersion"
-        ) as? String ?? "11"
+        ) as? String ?? "14"
         let credits = NSAttributedString(
             string: texts.aboutCredits,
             attributes: [
@@ -863,6 +1125,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         UserDefaults.standard.bool(forKey: showSpeedInMenuBarKey)
     }
 
+    private var currentSpeedDisplayUnit: SpeedDisplayUnit {
+        guard
+            let rawValue = UserDefaults.standard.string(forKey: speedDisplayUnitKey),
+            let unit = SpeedDisplayUnit(rawValue: rawValue)
+        else {
+            return .automatic
+        }
+        return unit
+    }
+
     private var currentLanguage: AppLanguage {
         get {
             if let rawValue = UserDefaults.standard.string(forKey: languageKey),
@@ -883,7 +1155,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func registerDefaultSettings() {
         UserDefaults.standard.register(defaults: [
             showSpeedInMenuBarKey: true,
-            hideDockIconKey: false
+            hideDockIconKey: false,
+            notificationsEnabledKey: false,
+            speedDisplayUnitKey: SpeedDisplayUnit.automatic.rawValue
         ])
     }
 
@@ -944,6 +1218,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         mainWindowModel.onHideDockIconChanged = { [weak self] enabled in
             self?.setHideDockIcon(enabled)
         }
+        mainWindowModel.onNotificationsChanged = { [weak self] enabled in
+            self?.setNotificationsEnabled(enabled)
+        }
+        mainWindowModel.onSpeedUnitChanged = { [weak self] unit in
+            self?.setSpeedDisplayUnit(unit)
+        }
         mainWindowModel.onLanguageChanged = { [weak self] language in
             self?.setLanguage(language)
         }
@@ -985,105 +1265,124 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func buildStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.toolTip = "TorrServer"
+        statusItem.button?.setAccessibilityLabel("TorrServer status")
         statusItem.button?.imagePosition = .imageLeading
         statusItem.button?.imageScaling = .scaleProportionallyUpOrDown
         statusItem.button?.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        statusItem.button?.target = self
+        statusItem.button?.action = #selector(toggleStatusPopover(_:))
+        statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
 
-        let menu = NSMenu()
-        menu.delegate = self
-        statusMenuItem = NSMenuItem(title: texts.stopped, action: nil, keyEquivalent: "")
-        statusMenuItem.isEnabled = false
-
-        speedMenuItem = NSMenuItem(
-            title: "\(texts.speedLabel): \(texts.speedNoData)",
-            action: nil,
-            keyEquivalent: ""
-        )
-        speedMenuItem.isEnabled = false
-
-        materialsHeaderMenuItem = NSMenuItem(
-            title: texts.materialsTitle,
-            action: nil,
-            keyEquivalent: ""
-        )
-        materialsHeaderMenuItem.isEnabled = false
-        materialsSeparatorMenuItem = .separator()
-
-        showWindowMenuItem = NSMenuItem(
-            title: texts.showWindow,
-            action: #selector(showMainWindow(_:)),
-            keyEquivalent: ""
-        )
-        showWindowMenuItem.target = self
-
-        startMenuItem = NSMenuItem(
-            title: texts.start,
-            action: #selector(startServer(_:)),
-            keyEquivalent: ""
-        )
-        startMenuItem.target = self
-
-        stopMenuItem = NSMenuItem(
-            title: texts.stop,
-            action: #selector(stopServer(_:)),
-            keyEquivalent: ""
-        )
-        stopMenuItem.target = self
-
-        openWebMenuItem = NSMenuItem(
-            title: texts.openWebUI,
-            action: #selector(openWebUI(_:)),
-            keyEquivalent: ""
-        )
-        openWebMenuItem.target = self
-
-        downloadMenuItem = NSMenuItem(
-            title: texts.downloadMenu,
-            action: #selector(downloadLatestTorrServer(_:)),
-            keyEquivalent: ""
-        )
-        downloadMenuItem.target = self
-
-        launchAtLoginMenuItem = NSMenuItem(
-            title: texts.launchAtLogin,
-            action: #selector(toggleLaunchAtLogin(_:)),
-            keyEquivalent: ""
-        )
-        launchAtLoginMenuItem.target = self
-
-        showSpeedMenuItem = NSMenuItem(
-            title: texts.showSpeed,
-            action: #selector(toggleSpeedInMenuBar(_:)),
-            keyEquivalent: ""
-        )
-        showSpeedMenuItem.target = self
-
-        menu.addItem(statusMenuItem)
-        menu.addItem(speedMenuItem)
-        menu.addItem(.separator())
-        menu.addItem(materialsHeaderMenuItem)
-        menu.addItem(materialsSeparatorMenuItem)
-        menu.addItem(startMenuItem)
-        menu.addItem(stopMenuItem)
-        menu.addItem(openWebMenuItem)
-        menu.addItem(.separator())
-        menu.addItem(showWindowMenuItem)
-        menu.addItem(downloadMenuItem)
-        menu.addItem(launchAtLoginMenuItem)
-        menu.addItem(showSpeedMenuItem)
-        menu.addItem(.separator())
-        quitMenuItem = menu.addItem(
-            withTitle: texts.quit,
-            action: #selector(NSApplication.terminate(_:)),
-            keyEquivalent: ""
+        popoverModel.onStart = { [weak self] in self?.startServer(nil) }
+        popoverModel.onStop = { [weak self] in self?.stopServer(nil) }
+        popoverModel.onOpenWeb = { [weak self] in self?.openWebUI(nil) }
+        popoverModel.onShowWindow = { [weak self] in
+            self?.statusPopover.performClose(nil)
+            self?.showMainWindow(nil)
+        }
+        popoverModel.onDownload = { [weak self] in self?.downloadLatestTorrServer(nil) }
+        popoverModel.onQuit = {
+            NSApp.terminate(nil)
+        }
+        popoverModel.onQRCodeVisibilityChanged = { [weak self] in
+            self?.synchronizePopoverLayout()
+        }
+        statusPopover = NSPopover()
+        statusPopover.behavior = .transient
+        statusPopover.animates = true
+        statusPopover.delegate = self
+        statusPopover.contentViewController = NSHostingController(
+            rootView: MenuBarPopoverView(model: popoverModel)
         )
 
-        statusItem.menu = menu
+        refreshQRCode()
     }
 
-    func menuWillOpen(_ menu: NSMenu) {
-        guard menu === statusItem.menu else { return }
-        refreshMaterialsMenu()
+    @objc private func toggleStatusPopover(_ sender: Any?) {
+        guard let button = statusItem.button else { return }
+
+        if statusPopover.isShown {
+            statusPopover.performClose(sender)
+            return
+        }
+
+        refreshQRCode()
+        refreshPopoverMaterial()
+        startPopoverRefreshTimer()
+        synchronizePopoverLayout()
+        statusPopover.show(
+            relativeTo: button.bounds,
+            of: button,
+            preferredEdge: .minY
+        )
+        synchronizePopoverLayout()
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        popoverRefreshTimer?.invalidate()
+        popoverRefreshTimer = nil
+    }
+
+    private func startPopoverRefreshTimer() {
+        popoverRefreshTimer?.invalidate()
+        popoverRefreshTimer = Timer.scheduledTimer(
+            withTimeInterval: 2,
+            repeats: true
+        ) { [weak self] _ in
+            self?.refreshPopoverMaterial()
+        }
+    }
+
+    private func synchronizePopoverLayout() {
+        guard
+            statusPopover != nil,
+            let contentView = statusPopover.contentViewController?.view
+        else {
+            return
+        }
+
+        contentView.layoutSubtreeIfNeeded()
+        let fittingSize = contentView.fittingSize
+        if fittingSize.width > 0, fittingSize.height > 0 {
+            statusPopover.contentSize = fittingSize
+        }
+
+        guard statusPopover.isShown else { return }
+
+        DispatchQueue.main.async { [weak self] in
+            guard
+                let self,
+                let popoverWindow = self.statusPopover.contentViewController?.view.window,
+                let button = self.statusItem.button,
+                let screen = button.window?.screen ?? popoverWindow.screen ?? NSScreen.main
+            else {
+                return
+            }
+
+            var frame = popoverWindow.frame
+            let horizontalMargin: CGFloat = 4
+            let verticalMargin: CGFloat = 4
+            let minimumY = screen.visibleFrame.minY + verticalMargin
+            let maximumY = screen.frame.maxY - verticalMargin
+            let minimumX = screen.frame.minX + horizontalMargin
+            let maximumX = screen.frame.maxX - horizontalMargin
+
+            if frame.maxY > maximumY {
+                frame.origin.y -= frame.maxY - maximumY
+            }
+            if frame.minY < minimumY {
+                frame.origin.y = minimumY
+            }
+            if frame.minX < minimumX {
+                frame.origin.x = minimumX
+            }
+            if frame.maxX > maximumX {
+                frame.origin.x -= frame.maxX - maximumX
+            }
+
+            popoverWindow.setFrameOrigin(frame.origin)
+        }
     }
 
     private func applyLanguage() {
@@ -1093,89 +1392,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         buildMainMenu()
         window?.title = texts.title
         mainWindowModel.language = language
-
-        showWindowMenuItem?.title = texts.showWindow
-        startMenuItem?.title = texts.start
-        stopMenuItem?.title = texts.stop
-        openWebMenuItem?.title = texts.openWebUI
-        downloadMenuItem?.title = texts.downloadMenu
-        launchAtLoginMenuItem?.title = texts.launchAtLogin
-        showSpeedMenuItem?.title = texts.showSpeed
-        quitMenuItem?.title = texts.quit
-        materialsHeaderMenuItem?.title = texts.materialsTitle
+        popoverModel.language = language
         refreshSpeedDisplay()
     }
 
-    private func refreshMaterialsMenu() {
+    private func refreshPopoverMaterial() {
         guard processController.isRunning else {
             currentTorrents = []
-            updateMaterialsMenu(with: [])
+            popoverModel.isLoadingMaterial = false
+            updatePopoverMaterial(with: [])
             return
         }
 
-        setMaterialsLoading()
+        popoverModel.isLoadingMaterial = true
         libraryClient.fetchTorrents { [weak self] result in
             guard let self else { return }
+            self.popoverModel.isLoadingMaterial = false
 
             switch result {
             case .success(let torrents):
                 self.currentTorrents = torrents
-                self.updateMaterialsMenu(with: torrents)
+                self.updatePopoverMaterial(with: torrents)
             case .failure:
                 self.currentTorrents = []
-                self.updateMaterialsMenu(with: [])
+                self.updatePopoverMaterial(with: [])
             }
+            self.synchronizePopoverLayout()
         }
     }
 
-    private func setMaterialsLoading() {
-        replaceMaterialMenuItems([
-            disabledMenuItem(title: texts.loadingMaterials)
-        ])
+    private func updatePopoverMaterial(with torrents: [TorrentSummary]) {
+        let active = torrents.first(where: \.isActive)
+        let selected = active ?? torrents.first
+        popoverModel.activeTitle = selected?.title
+        popoverModel.materialIsActive = active != nil
+        popoverModel.activeSizeText = selected.map {
+            Self.formatFileSize($0.size)
+        } ?? ""
+        popoverModel.bufferProgress = selected?.bufferProgress
+        popoverModel.seeders = selected?.seeders ?? 0
+        popoverModel.peers = selected.map {
+            max($0.activePeers, $0.totalPeers)
+        } ?? 0
     }
 
-    private func updateMaterialsMenu(with torrents: [TorrentSummary]) {
-        let visible = Array(torrents.prefix(5))
-        var items: [NSMenuItem]
-
-        if visible.isEmpty {
-            items = [disabledMenuItem(title: texts.noMaterials)]
-        } else {
-            items = visible.map { torrent in
-                disabledMenuItem(title: makeMaterialMenuTitle(for: torrent))
-            }
-            if torrents.count > visible.count {
-                items.append(disabledMenuItem(title: texts.moreMaterials(torrents.count - visible.count)))
-            }
-        }
-
-        replaceMaterialMenuItems(items)
-    }
-
-    private func replaceMaterialMenuItems(_ items: [NSMenuItem]) {
-        guard let menu = statusItem.menu else { return }
-
-        materialMenuItems.forEach { menu.removeItem($0) }
-        materialMenuItems = items
-
-        let insertionIndex = menu.index(of: materialsSeparatorMenuItem)
-        let index = insertionIndex == -1 ? menu.numberOfItems : insertionIndex
-        for item in items.reversed() {
-            menu.insertItem(item, at: index)
-        }
-    }
-
-    private func disabledMenuItem(title: String) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        item.isEnabled = false
-        return item
-    }
-
-    private func makeMaterialMenuTitle(for torrent: TorrentSummary) -> String {
-        let title = Self.truncate(torrent.title, maxLength: 34)
-        let size = Self.formatFileSize(torrent.size)
-        let peers = max(torrent.activePeers, torrent.totalPeers)
-        return "\(title) · \(size) · \(texts.seedsShort) \(torrent.seeders) · \(texts.peersShort) \(peers)"
+    private func refreshQRCode() {
+        let localURL = LocalWebUIAddress.url()
+        popoverModel.webUIAddress = localURL.absoluteString
+        popoverModel.qrImage = QRCodeGenerator.image(for: localURL.absoluteString)
     }
 
     private func updateUI(for state: TorrServerProcessController.State) {
@@ -1259,7 +1523,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func updateSpeedMonitor(for state: TorrServerProcessController.State) {
         let shouldRun: Bool
-        if case .running = state, isSpeedDisplayEnabled {
+        if case .running = state {
             shouldRun = true
         } else {
             shouldRun = false
@@ -1270,6 +1534,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             speedMonitor.stop()
             currentSpeedBytesPerSecond = nil
+            speedHistory.removeAll()
+            popoverModel.speedSamples = []
+            updatePopoverMaterial(with: [])
+        }
+    }
+
+    private func recordSpeedSample(_ speed: Double?) {
+        currentSpeedBytesPerSecond = speed
+
+        if processController.isRunning {
+            speedHistory.append(max(speed ?? 0, 0))
+            if speedHistory.count > 30 {
+                speedHistory.removeFirst(speedHistory.count - 30)
+            }
+        }
+
+        popoverModel.speedSamples = speedHistory
+        refreshSpeedDisplay()
+    }
+
+    private func handleNotification(for state: TorrServerProcessController.State) {
+        switch state {
+        case .running:
+            guard !hasAnnouncedRunningState else { return }
+            hasAnnouncedRunningState = true
+            notificationController.send(
+                title: texts.serverStartedNotificationTitle,
+                body: texts.serverStartedNotificationMessage
+            )
+
+        case .failed(let message):
+            hasAnnouncedRunningState = false
+            notificationController.send(
+                title: texts.errorNotificationTitle,
+                body: message
+            )
+
+        case .stopped:
+            hasAnnouncedRunningState = false
+
+        case .stopping:
+            break
         }
     }
 
@@ -1297,15 +1603,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         mainWindowModel.autoStartServer = UserDefaults.standard.bool(forKey: autoStartServerKey)
         mainWindowModel.showSpeed = isSpeedDisplayEnabled
         mainWindowModel.hideDockIcon = UserDefaults.standard.bool(forKey: hideDockIconKey)
+        mainWindowModel.notificationsEnabled = UserDefaults.standard.bool(
+            forKey: notificationsEnabledKey
+        )
+        mainWindowModel.speedUnit = currentSpeedDisplayUnit
 
-        statusMenuItem.title = menuStatus
-        startMenuItem.isEnabled = canStart
-        stopMenuItem.isEnabled = canStop
-        openWebMenuItem.isEnabled = canOpenWeb
-        downloadMenuItem.isEnabled = canDownload
-        launchAtLoginMenuItem.state = launchAtLoginController.isEnabled ? .on : .off
-        showSpeedMenuItem.state = isSpeedDisplayEnabled ? .on : .off
-
+        popoverModel.statusKind = mainStatusKind(for: dotColor)
+        popoverModel.statusText = menuStatus
+        popoverModel.isRunning = processController.isRunning
+        popoverModel.canStart = canStart
+        popoverModel.canStop = canStop
+        popoverModel.canOpenWeb = canOpenWeb
+        popoverModel.canDownload = canDownload
+        popoverModel.isDownloading = isDownloading
         currentStatusIconColor = statusIconColor
         refreshSpeedDisplay()
     }
@@ -1352,23 +1662,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard statusItem != nil else { return }
 
         let isServerRunning = processController.isRunning
-        let speedText: String
-        if isSpeedDisplayEnabled, isServerRunning {
-            speedText = currentSpeedBytesPerSecond.map(Self.formatSpeed) ?? texts.speedNoData
-        } else if isSpeedDisplayEnabled {
-            speedText = texts.stopped
-        } else {
-            speedText = texts.speedOff
-        }
-
-        speedMenuItem.title = "\(texts.speedLabel): \(speedText)"
-        showSpeedMenuItem.state = isSpeedDisplayEnabled ? .on : .off
+        let speedText = currentSpeedBytesPerSecond.map {
+            SpeedFormatter.string(
+                bytesPerSecond: $0,
+                unit: currentSpeedDisplayUnit
+            )
+        } ?? SpeedFormatter.string(
+            bytesPerSecond: 0,
+            unit: currentSpeedDisplayUnit
+        )
+        popoverModel.speedText = speedText
+        popoverModel.speedSamples = speedHistory
 
         let shouldShowSpeed = isSpeedDisplayEnabled
             && isServerRunning
             && (currentSpeedBytesPerSecond ?? 0) > 0
         let title = shouldShowSpeed
-            ? currentSpeedBytesPerSecond.map(Self.formatSpeed) ?? ""
+            ? currentSpeedBytesPerSecond.map {
+                SpeedFormatter.string(
+                    bytesPerSecond: $0,
+                    unit: currentSpeedDisplayUnit
+                )
+            } ?? ""
             : ""
 
         statusItem.length = title.isEmpty
@@ -1381,14 +1696,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             : "TorrServer · \(title)"
     }
 
-    private static func formatSpeed(_ bytesPerSecond: Double) -> String {
-        if bytesPerSecond >= 1024 * 1024 {
-            return String(format: "%.1f MB/s", bytesPerSecond / 1024 / 1024)
-        }
-
-        return String(format: "%.0f KB/s", bytesPerSecond / 1024)
-    }
-
     private static func formatFileSize(_ bytes: Int64) -> String {
         guard bytes > 0 else { return "0 MB" }
 
@@ -1398,11 +1705,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         return String(format: "%.0f MB", value / 1024 / 1024)
-    }
-
-    private static func truncate(_ text: String, maxLength: Int) -> String {
-        guard text.count > maxLength else { return text }
-        return String(text.prefix(maxLength - 1)) + "…"
     }
 
     private func saveCurrentPath() {
