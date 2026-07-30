@@ -871,6 +871,7 @@ final class NotificationController: NSObject, UNUserNotificationCenterDelegate {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private let processController = TorrServerProcessController()
     private let downloader = TorrServerDownloader()
@@ -879,9 +880,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private let libraryClient = TorrServerLibraryClient()
     private let notificationController = NotificationController()
     private let mainWindowModel = MainWindowModel()
+    private let libraryModel = LibraryViewModel()
     private let popoverModel = MenuBarPopoverModel()
 
     private var window: NSWindow!
+    private var serverContentSize = NSSize(width: 580, height: 500)
 
     private var statusItem: NSStatusItem!
     private var statusPopover: NSPopover!
@@ -1094,10 +1097,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     @objc private func showAboutPanel(_ sender: Any?) {
         let version = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"
-        ) as? String ?? "2.0.2"
+        ) as? String ?? "2.1.0"
         let build = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleVersion"
-        ) as? String ?? "14"
+        ) as? String ?? "15"
         let credits = NSAttributedString(
             string: texts.aboutCredits,
             attributes: [
@@ -1227,17 +1230,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         mainWindowModel.onLanguageChanged = { [weak self] language in
             self?.setLanguage(language)
         }
+        mainWindowModel.onSectionChanged = { [weak self] section in
+            self?.resizeWindow(for: section)
+        }
 
         let hostingView = NSHostingView(
-            rootView: MainWindowView(model: mainWindowModel)
+            rootView: ApplicationRootView(
+                mainModel: mainWindowModel,
+                libraryModel: libraryModel
+            )
         )
         window.contentView = hostingView
         hostingView.layoutSubtreeIfNeeded()
 
         let fixedContentSize = hostingView.fittingSize
+        serverContentSize = fixedContentSize
         window.setContentSize(fixedContentSize)
         window.contentMinSize = fixedContentSize
         window.contentMaxSize = fixedContentSize
+    }
+
+    private func resizeWindow(for section: AppSection) {
+        guard window != nil else { return }
+
+        let targetSize: NSSize
+        switch section {
+        case .server:
+            targetSize = serverContentSize
+        case .library:
+            targetSize = NSSize(width: 920, height: 640)
+        }
+
+        let currentFrame = window.frame
+        let contentRect = NSRect(origin: .zero, size: targetSize)
+        var targetFrame = window.frameRect(forContentRect: contentRect)
+        targetFrame.origin.x = currentFrame.midX - targetFrame.width / 2
+        targetFrame.origin.y = currentFrame.maxY - targetFrame.height
+
+        if let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {
+            if targetFrame.minX < visibleFrame.minX {
+                targetFrame.origin.x = visibleFrame.minX
+            }
+            if targetFrame.maxX > visibleFrame.maxX {
+                targetFrame.origin.x -= targetFrame.maxX - visibleFrame.maxX
+            }
+            if targetFrame.minY < visibleFrame.minY {
+                targetFrame.origin.y = visibleFrame.minY
+            }
+            if targetFrame.maxY > visibleFrame.maxY {
+                targetFrame.origin.y -= targetFrame.maxY - visibleFrame.maxY
+            }
+        }
+
+        window.contentMinSize = targetSize
+        window.contentMaxSize = targetSize
+        window.setFrame(targetFrame, display: true, animate: true)
     }
 
     private func buildMainMenu() {
@@ -1330,7 +1377,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             withTimeInterval: 2,
             repeats: true
         ) { [weak self] _ in
-            self?.refreshPopoverMaterial()
+            Task { @MainActor in
+                self?.refreshPopoverMaterial()
+            }
         }
     }
 
@@ -1722,6 +1771,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 }
 
 let app = NSApplication.shared
-let appDelegate = AppDelegate()
+let appDelegate = MainActor.assumeIsolated {
+    AppDelegate()
+}
 app.delegate = appDelegate
 app.run()

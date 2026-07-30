@@ -40,6 +40,7 @@ final class MainWindowModel: ObservableObject {
     @Published var hideDockIcon = false
     @Published var notificationsEnabled = false
     @Published var speedUnit: SpeedDisplayUnit = .automatic
+    @Published var selectedSection: AppSection = .server
 
     var onPathChanged: ((String) -> Void)?
     var onChoose: (() -> Void)?
@@ -54,6 +55,7 @@ final class MainWindowModel: ObservableObject {
     var onNotificationsChanged: ((Bool) -> Void)?
     var onSpeedUnitChanged: ((SpeedDisplayUnit) -> Void)?
     var onLanguageChanged: ((AppLanguage) -> Void)?
+    var onSectionChanged: ((AppSection) -> Void)?
 }
 
 struct MainWindowView: View {
@@ -114,6 +116,10 @@ struct MainWindowView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Spacer()
+
+            AppSectionPicker(model: model)
 
             Spacer()
 

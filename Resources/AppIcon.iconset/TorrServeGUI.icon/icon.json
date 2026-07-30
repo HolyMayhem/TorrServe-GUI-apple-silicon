@@ -62,6 +62,7 @@
               "value" : true
             }
           ],
+          "hidden" : false,
           "image-name" : "element2 MacOS.png",
           "name" : "element2 MacOS",
           "opacity-specializations" : [
@@ -89,8 +90,8 @@
               "value" : {
                 "scale" : 1.15,
                 "translation-in-points" : [
-                  0.5499999999999545,
-                  0
+                  0.5749999999999318,
+                  5.684341886080802e-14
                 ]
               }
             }
