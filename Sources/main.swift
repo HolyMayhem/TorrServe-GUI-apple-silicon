@@ -2,6 +2,7 @@ import AppKit
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import Darwin
+import QuartzCore
 import SwiftUI
 import UserNotifications
 
@@ -104,6 +105,27 @@ struct Texts {
     var launchError: String { language == .russian ? "Ошибка запуска" : "Launch Error" }
     func error(_ message: String) -> String {
         language == .russian ? "Ошибка: \(message)" : "Error: \(message)"
+    }
+    func errorTooltip(_ message: String) -> String {
+        if language == .russian {
+            return """
+            TorrServer неожиданно завершил работу.
+
+            \(message)
+
+            Возможные причины: порт 8090 уже занят другой копией TorrServer, \
+            исполняемый файл повреждён или macOS запретила его запуск.
+            """
+        }
+
+        return """
+        TorrServer stopped unexpectedly.
+
+        \(message)
+
+        Possible causes: port 8090 is already used by another TorrServer process, \
+        the executable is damaged, or macOS blocked it from launching.
+        """
     }
     var speedLabel: String { language == .russian ? "Скорость" : "Speed" }
     var speedOff: String { language == .russian ? "выключена" : "off" }
@@ -881,6 +903,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private let notificationController = NotificationController()
     private let mainWindowModel = MainWindowModel()
     private let libraryModel = LibraryViewModel()
+    private let searchModel = SearchViewModel()
     private let popoverModel = MenuBarPopoverModel()
 
     private var window: NSWindow!
@@ -1097,10 +1120,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     @objc private func showAboutPanel(_ sender: Any?) {
         let version = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"
-        ) as? String ?? "2.1.0"
+        ) as? String ?? "2.2.2"
         let build = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleVersion"
-        ) as? String ?? "15"
+        ) as? String ?? "19"
         let credits = NSAttributedString(
             string: texts.aboutCredits,
             attributes: [
@@ -1233,11 +1256,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         mainWindowModel.onSectionChanged = { [weak self] section in
             self?.resizeWindow(for: section)
         }
+        searchModel.onTorrentAdded = { [weak self] hash in
+            self?.libraryModel.refresh(selectingHash: hash)
+        }
 
         let hostingView = NSHostingView(
             rootView: ApplicationRootView(
                 mainModel: mainWindowModel,
-                libraryModel: libraryModel
+                libraryModel: libraryModel,
+                searchModel: searchModel
             )
         )
         window.contentView = hostingView
@@ -1257,7 +1284,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         switch section {
         case .server:
             targetSize = serverContentSize
-        case .library:
+        case .library, .search:
             targetSize = NSSize(width: 920, height: 640)
         }
 
@@ -1282,9 +1309,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             }
         }
 
-        window.contentMinSize = targetSize
-        window.contentMaxSize = targetSize
-        window.setFrame(targetFrame, display: true, animate: true)
+        let currentContentSize = window.contentLayoutRect.size
+        window.contentMinSize = NSSize(
+            width: min(currentContentSize.width, targetSize.width),
+            height: min(currentContentSize.height, targetSize.height)
+        )
+        window.contentMaxSize = NSSize(
+            width: max(currentContentSize.width, targetSize.width),
+            height: max(currentContentSize.height, targetSize.height)
+        )
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.28
+            context.timingFunction = CAMediaTimingFunction(
+                name: .easeInEaseOut
+            )
+            window.animator().setFrame(targetFrame, display: true)
+        } completionHandler: { [weak self] in
+            Task { @MainActor in
+                guard
+                    let self,
+                    self.mainWindowModel.selectedSection == section
+                else {
+                    return
+                }
+                self.window.contentMinSize = targetSize
+                self.window.contentMaxSize = targetSize
+            }
+        }
     }
 
     private func buildMainMenu() {
@@ -1442,6 +1494,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         window?.title = texts.title
         mainWindowModel.language = language
         popoverModel.language = language
+        updateUI(for: processController.state)
         refreshSpeedDisplay()
     }
 
@@ -1499,6 +1552,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             applyUIState(
                 dotColor: .systemOrange,
                 statusText: texts.downloading,
+                statusTooltip: texts.downloading,
                 canStart: false,
                 canStop: false,
                 canBrowse: false,
@@ -1516,6 +1570,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             applyUIState(
                 dotColor: .systemGray,
                 statusText: hasPath ? texts.stopped : texts.chooseOrDownload,
+                statusTooltip: hasPath ? texts.stopped : texts.chooseOrDownload,
                 canStart: hasPath,
                 canStop: false,
                 canBrowse: true,
@@ -1530,6 +1585,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             applyUIState(
                 dotColor: .systemGreen,
                 statusText: texts.running(pid: pid),
+                statusTooltip: texts.running(pid: pid),
                 canStart: false,
                 canStop: true,
                 canBrowse: false,
@@ -1544,6 +1600,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             applyUIState(
                 dotColor: .systemOrange,
                 statusText: texts.stopping,
+                statusTooltip: texts.stopping,
                 canStart: false,
                 canStop: false,
                 canBrowse: false,
@@ -1558,6 +1615,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             applyUIState(
                 dotColor: .systemRed,
                 statusText: texts.error(message),
+                statusTooltip: texts.errorTooltip(message),
                 canStart: hasPath,
                 canStop: false,
                 canBrowse: true,
@@ -1631,6 +1689,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private func applyUIState(
         dotColor: NSColor,
         statusText: String,
+        statusTooltip: String,
         canStart: Bool,
         canStop: Bool,
         canBrowse: Bool,
@@ -1642,6 +1701,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     ) {
         mainWindowModel.statusKind = mainStatusKind(for: dotColor)
         mainWindowModel.statusText = statusText
+        mainWindowModel.statusTooltip = statusTooltip
         mainWindowModel.canStart = canStart
         mainWindowModel.canStop = canStop
         mainWindowModel.canOpenWeb = canOpenWeb

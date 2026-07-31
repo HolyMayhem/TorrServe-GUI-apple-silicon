@@ -44,22 +44,30 @@ final class LibraryViewModel: ObservableObject {
     @Published var magnetInput = ""
     @Published var isRefreshing = false
     @Published var isAdding = false
+    @Published var isRemoving = false
     @Published var isDropTargeted = false
     @Published var alert: LibraryAlert?
     @Published var playerChoice: ExternalPlayerChoice
     @Published var customPlayerPath: String
+    @Published private(set) var metadataByHash: [String: LibraryMetadata] = [:]
 
     private let api: NativeTorrServerAPI
+    private let metadataStore: LibraryMetadataStore
     private var refreshTimer: Timer?
 
-    init(api: NativeTorrServerAPI = NativeTorrServerAPI()) {
+    init(
+        api: NativeTorrServerAPI = NativeTorrServerAPI(),
+        metadataStore: LibraryMetadataStore = .shared
+    ) {
         self.api = api
+        self.metadataStore = metadataStore
         playerChoice = ExternalPlayerChoice(
             rawValue: UserDefaults.standard.string(forKey: libraryPlayerKey) ?? ""
         ) ?? .quickTime
         customPlayerPath = UserDefaults.standard.string(
             forKey: libraryCustomPlayerPathKey
         ) ?? ""
+        metadataByHash = metadataStore.allMetadata()
     }
 
     var filteredTorrents: [NativeTorrent] {
@@ -103,6 +111,7 @@ final class LibraryViewModel: ObservableObject {
             do {
                 let values = try await api.listTorrents()
                 torrents = values
+                metadataByHash = metadataStore.allMetadata()
 
                 if let selectedTorrentID,
                    !values.contains(where: { $0.id == selectedTorrentID }) {
@@ -121,6 +130,15 @@ final class LibraryViewModel: ObservableObject {
 
     func select(_ torrent: NativeTorrent) {
         selectedTorrentID = torrent.id
+    }
+
+    func metadata(for torrent: NativeTorrent) -> LibraryMetadata? {
+        metadataByHash[torrent.hash.lowercased()]
+    }
+
+    func refresh(selectingHash: String) {
+        selectedTorrentID = selectingHash
+        refresh(silently: true)
     }
 
     func addMagnet(language: AppLanguage) {
@@ -187,25 +205,12 @@ final class LibraryViewModel: ObservableObject {
         }
     }
 
-    func removeSelected(language: AppLanguage) {
-        guard let torrent = selectedTorrent else { return }
-
-        let confirmation = NSAlert()
-        confirmation.alertStyle = .warning
-        confirmation.messageText = language == .russian
-            ? "Удалить материал?"
-            : "Remove this material?"
-        confirmation.informativeText = torrent.displayTitle
-        confirmation.addButton(
-            withTitle: language == .russian ? "Удалить" : "Remove"
-        )
-        confirmation.addButton(
-            withTitle: language == .russian ? "Отмена" : "Cancel"
-        )
-
-        guard confirmation.runModal() == .alertFirstButtonReturn else { return }
+    func removeSelected() {
+        guard let torrent = selectedTorrent, !isRemoving else { return }
+        isRemoving = true
 
         Task {
+            defer { isRemoving = false }
             do {
                 try await api.removeTorrent(hash: torrent.hash)
                 selectedTorrentID = nil

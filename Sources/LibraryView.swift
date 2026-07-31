@@ -12,31 +12,8 @@ struct LibraryView: View {
     }
 
     var body: some View {
-        ZStack {
-            Rectangle()
-                .fill(.ultraThinMaterial)
-                .ignoresSafeArea()
-
-            LinearGradient(
-                colors: [
-                    Color(nsColor: .windowBackgroundColor).opacity(0.36),
-                    Color.green.opacity(0.045),
-                    Color(nsColor: .windowBackgroundColor).opacity(0.22)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-
-            VStack(spacing: 12) {
-                header
-                libraryContent
-            }
-            .padding(.horizontal, 17)
-            .padding(.top, 6)
-            .padding(.bottom, 17)
-        }
-        .frame(width: 920, height: 640)
+        libraryContent
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $showsMagnetSheet) {
             magnetSheet
         }
@@ -58,42 +35,6 @@ struct LibraryView: View {
             isTargeted: $model.isDropTargeted,
             perform: handleDrop
         )
-    }
-
-    private var header: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("TorrServer")
-                    .font(.system(size: 24, weight: .semibold, design: .rounded))
-                Text("Holy Mayhem")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            AppSectionPicker(model: mainModel)
-
-            Spacer()
-
-            HStack(spacing: 7) {
-                Circle()
-                    .fill(mainModel.statusKind.color)
-                    .frame(width: 10, height: 10)
-                    .shadow(
-                        color: mainModel.statusKind.color.opacity(0.45),
-                        radius: 4
-                    )
-
-                Text(mainModel.statusText)
-                    .font(.system(size: 12.5, weight: .medium))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            .padding(.horizontal, 13)
-            .padding(.vertical, 8)
-            .libraryGlass(in: Capsule())
-        }
     }
 
     private var libraryContent: some View {
@@ -204,6 +145,7 @@ struct LibraryView: View {
             TorrentDetailView(
                 torrent: torrent,
                 model: model,
+                metadata: model.metadata(for: torrent),
                 language: mainModel.language
             )
             .padding(14)
@@ -384,7 +326,9 @@ private struct TorrentLibraryRow: View {
 private struct TorrentDetailView: View {
     let torrent: NativeTorrent
     @ObservedObject var model: LibraryViewModel
+    let metadata: LibraryMetadata?
     let language: AppLanguage
+    @State private var showsDeleteConfirmation = false
 
     private var texts: LibraryTexts {
         LibraryTexts(language: language)
@@ -409,6 +353,14 @@ private struct TorrentDetailView: View {
                     Text(LibraryFormat.fileSize(torrent.torrentSize))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+
+                    if let summary = metadata?.summary, !summary.isEmpty {
+                        Text(summary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(3)
+                            .help(summary)
+                    }
                 }
 
                 Spacer()
@@ -437,14 +389,31 @@ private struct TorrentDetailView: View {
                 .menuStyle(.borderlessButton)
                 .fixedSize()
 
-                Button(role: .destructive) {
-                    model.removeSelected(language: language)
+                Button {
+                    showsDeleteConfirmation = true
                 } label: {
                     Image(systemName: "trash")
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.red)
                 .help(texts.remove)
+                .popover(
+                    isPresented: $showsDeleteConfirmation,
+                    arrowEdge: .top
+                ) {
+                    DeleteConfirmationPopover(
+                        title: torrent.displayTitle,
+                        texts: texts,
+                        isRemoving: model.isRemoving,
+                        cancel: {
+                            showsDeleteConfirmation = false
+                        },
+                        confirm: {
+                            showsDeleteConfirmation = false
+                            model.removeSelected()
+                        }
+                    )
+                }
             }
 
             statistics
@@ -504,8 +473,11 @@ private struct TorrentDetailView: View {
     @ViewBuilder
     private var poster: some View {
         let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        let posterValue = torrent.poster.isEmpty
+            ? (metadata?.posterURL ?? "")
+            : torrent.poster
 
-        if let url = URL(string: torrent.poster), !torrent.poster.isEmpty {
+        if let url = URL(string: posterValue), !posterValue.isEmpty {
             AsyncImage(url: url) { image in
                 image
                     .resizable()
@@ -603,6 +575,52 @@ private struct TorrentFileRow: View {
     }
 }
 
+private struct DeleteConfirmationPopover: View {
+    let title: String
+    let texts: LibraryTexts
+    let isRemoving: Bool
+    let cancel: () -> Void
+    let confirm: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label(texts.removeMaterialQuestion, systemImage: "trash")
+                .font(.headline)
+                .foregroundStyle(.red)
+
+            Text(title)
+                .font(.callout)
+                .lineLimit(2)
+
+            Text(texts.removeMaterialHint)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                Spacer()
+
+                Button(texts.cancel, action: cancel)
+                    .keyboardShortcut(.cancelAction)
+
+                Button(role: .destructive, action: confirm) {
+                    if isRemoving {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Text(texts.remove)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .keyboardShortcut(.defaultAction)
+                .disabled(isRemoving)
+            }
+        }
+        .padding(16)
+        .frame(width: 300)
+    }
+}
+
 private struct LibraryTexts {
     let language: AppLanguage
 
@@ -639,6 +657,14 @@ private struct LibraryTexts {
             : "Add a magnet link or a torrent file."
     }
     var remove: String { language == .russian ? "Удалить" : "Remove" }
+    var removeMaterialQuestion: String {
+        language == .russian ? "Удалить материал?" : "Remove this item?"
+    }
+    var removeMaterialHint: String {
+        language == .russian
+            ? "Материал будет удалён из библиотеки TorrServer."
+            : "This item will be removed from the TorrServer library."
+    }
     var downloaded: String { language == .russian ? "Загружено" : "Downloaded" }
     var files: String { language == .russian ? "Файлы" : "Files" }
     var playerHint: String {
@@ -695,16 +721,6 @@ private enum LibraryFormat {
 }
 
 private extension View {
-    @ViewBuilder
-    func libraryGlass<S: Shape>(in shape: S) -> some View {
-        if #available(macOS 26.0, *) {
-            self.glassEffect(.regular, in: shape)
-        } else {
-            self.background(.regularMaterial, in: shape)
-                .overlay(shape.stroke(.white.opacity(0.12), lineWidth: 0.5))
-        }
-    }
-
     @ViewBuilder
     func libraryPanel() -> some View {
         let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)

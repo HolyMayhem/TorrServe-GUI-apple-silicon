@@ -25,6 +25,7 @@ final class MainWindowModel: ObservableObject {
     @Published var path = ""
     @Published var language: AppLanguage = .systemDefault
     @Published var statusText = ""
+    @Published var statusTooltip = ""
     @Published var statusKind: MainStatusKind = .stopped
 
     @Published var canStart = false
@@ -66,78 +67,12 @@ struct MainWindowView: View {
     }
 
     var body: some View {
-        ZStack {
-            Rectangle()
-                .fill(.ultraThinMaterial)
-                .ignoresSafeArea()
-
-            LinearGradient(
-                colors: [
-                    Color(nsColor: .windowBackgroundColor).opacity(0.34),
-                    Color.green.opacity(0.045),
-                    Color(nsColor: .windowBackgroundColor).opacity(0.22)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-
-            RadialGradient(
-                colors: [
-                    Color.white.opacity(0.045),
-                    Color.clear
-                ],
-                center: .topLeading,
-                startRadius: 0,
-                endRadius: 360
-            )
-            .ignoresSafeArea()
-
-            VStack(spacing: 12) {
-                header
-                executableSection
-                actionSection
-                settingsSection
-            }
-            .frame(maxWidth: .infinity, alignment: .top)
-            .padding(.horizontal, 17)
-            .padding(.top, 6)
-            .padding(.bottom, 17)
+        VStack(spacing: 12) {
+            executableSection
+            actionSection
+            settingsSection
         }
-        .frame(width: 580)
-    }
-
-    private var header: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("TorrServer")
-                    .font(.system(size: 24, weight: .semibold, design: .rounded))
-                Text("Holy Mayhem")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            AppSectionPicker(model: model)
-
-            Spacer()
-
-            HStack(spacing: 7) {
-                Circle()
-                    .fill(model.statusKind.color)
-                    .frame(width: 10, height: 10)
-                    .shadow(color: model.statusKind.color.opacity(0.45), radius: 4)
-
-                Text(model.statusText)
-                    .font(.system(size: 12.5, weight: .medium))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            .padding(.horizontal, 13)
-            .padding(.vertical, 8)
-            .adaptiveGlass(in: Capsule())
-        }
+        .frame(maxWidth: .infinity, alignment: .top)
     }
 
     private var executableSection: some View {
@@ -529,16 +464,6 @@ private struct GlassSpeedUnitPicker: View {
 }
 
 private extension View {
-    @ViewBuilder
-    func adaptiveGlass<S: Shape>(in shape: S) -> some View {
-        if #available(macOS 26.0, *) {
-            self.glassEffect(.regular, in: shape)
-        } else {
-            self.background(.regularMaterial, in: shape)
-                .overlay(shape.stroke(.white.opacity(0.12), lineWidth: 0.5))
-        }
-    }
-
     @ViewBuilder
     func glassSection() -> some View {
         let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)

@@ -1,0 +1,282 @@
+import AppKit
+import Foundation
+import Security
+
+private let jackettServerURLKey = "JackettServerURL"
+private let jackettAPIKeyKey = "JackettAPIKey"
+
+@MainActor
+final class SearchViewModel: ObservableObject {
+    @Published var serverURL: String
+    @Published var apiKey: String
+    @Published var query = ""
+    @Published var results: [JackettSearchResult] = []
+    @Published var selectedResultID: String?
+    @Published var isSearching = false
+    @Published var isTesting = false
+    @Published var addingResultID: String?
+    @Published var addedResultIDs: Set<String> = []
+    @Published var connectionMessage = ""
+    @Published var connectionIsHealthy = false
+    @Published var showsSettings = false
+    @Published var alert: LibraryAlert?
+
+    var onTorrentAdded: ((String) -> Void)?
+
+    private let jackett: JackettClient
+    private let torrServer: NativeTorrServerAPI
+    private let metadataStore: LibraryMetadataStore
+    private let credentialStore = JackettCredentialStore()
+
+    init(
+        jackett: JackettClient = JackettClient(),
+        torrServer: NativeTorrServerAPI = NativeTorrServerAPI(),
+        metadataStore: LibraryMetadataStore = .shared
+    ) {
+        self.jackett = jackett
+        self.torrServer = torrServer
+        self.metadataStore = metadataStore
+        serverURL = UserDefaults.standard.string(forKey: jackettServerURLKey)
+            ?? "http://127.0.0.1:9117"
+        let legacyAPIKey = UserDefaults.standard.string(forKey: jackettAPIKeyKey)
+            ?? ""
+        apiKey = credentialStore.read() ?? legacyAPIKey
+        if !legacyAPIKey.isEmpty, credentialStore.save(legacyAPIKey) {
+            UserDefaults.standard.removeObject(forKey: jackettAPIKeyKey)
+        }
+    }
+
+    var configuration: JackettConfiguration {
+        JackettConfiguration(serverURL: serverURL, apiKey: apiKey)
+    }
+
+    var isConfigured: Bool {
+        configuration.isComplete
+    }
+
+    var selectedResult: JackettSearchResult? {
+        guard let selectedResultID else { return nil }
+        return results.first { $0.id == selectedResultID }
+    }
+
+    func saveSettings() {
+        let normalizedURL = configuration.normalizedServerURL?.absoluteString
+            ?? serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        serverURL = normalizedURL
+        UserDefaults.standard.set(serverURL, forKey: jackettServerURLKey)
+        let normalizedAPIKey = apiKey.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        if credentialStore.save(normalizedAPIKey) {
+            UserDefaults.standard.removeObject(forKey: jackettAPIKeyKey)
+        } else {
+            UserDefaults.standard.set(normalizedAPIKey, forKey: jackettAPIKeyKey)
+        }
+    }
+
+    func testConnection(language: AppLanguage, closeOnSuccess: Bool = false) {
+        guard configuration.isComplete else {
+            connectionIsHealthy = false
+            connectionMessage = SearchTexts(language: language).enterSettings
+            return
+        }
+
+        saveSettings()
+        isTesting = true
+        connectionMessage = ""
+        Task {
+            defer { isTesting = false }
+            do {
+                try await jackett.test(configuration: configuration)
+                connectionIsHealthy = true
+                connectionMessage = SearchTexts(language: language).connectionReady
+                if closeOnSuccess {
+                    showsSettings = false
+                }
+            } catch {
+                connectionIsHealthy = false
+                connectionMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func search(language: AppLanguage) {
+        let value = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        guard configuration.isComplete else {
+            showsSettings = true
+            return
+        }
+
+        saveSettings()
+        isSearching = true
+        connectionMessage = ""
+        Task {
+            defer { isSearching = false }
+            do {
+                let values = try await jackett.search(
+                    query: value,
+                    configuration: configuration
+                )
+                results = values
+                selectedResultID = values.first?.id
+                connectionIsHealthy = true
+            } catch {
+                connectionIsHealthy = false
+                alert = LibraryAlert(
+                    title: "Jackett",
+                    message: error.localizedDescription
+                )
+            }
+        }
+    }
+
+    func select(_ result: JackettSearchResult) {
+        selectedResultID = result.id
+    }
+
+    func add(
+        _ result: JackettSearchResult,
+        language: AppLanguage,
+        serverIsRunning: Bool
+    ) {
+        guard serverIsRunning else {
+            alert = LibraryAlert(
+                title: "TorrServer",
+                message: SearchTexts(language: language).startServerFirst
+            )
+            return
+        }
+        guard addingResultID == nil else { return }
+
+        addingResultID = result.id
+        Task {
+            defer { addingResultID = nil }
+            do {
+                let payload = try await jackett.download(result)
+                let poster = result.posterURL?.absoluteString ?? ""
+                let category = result.torrServerCategory
+                let torrent: NativeTorrent
+
+                switch payload {
+                case .magnet(let magnet):
+                    torrent = try await torrServer.addMagnet(
+                        magnet,
+                        title: result.title,
+                        poster: poster,
+                        category: category
+                    )
+
+                case .torrent(let data, let filename):
+                    let values = try await torrServer.uploadTorrent(
+                        data: data,
+                        filename: filename,
+                        title: result.title,
+                        poster: poster,
+                        category: category
+                    )
+                    guard let value = values.first else {
+                        throw AppError("TorrServer did not return the added torrent.")
+                    }
+                    torrent = value
+                }
+
+                let hash = torrent.hash.isEmpty ? result.infoHash : torrent.hash
+                metadataStore.save(
+                    LibraryMetadata(
+                        title: result.title,
+                        posterURL: poster,
+                        summary: result.summary,
+                        source: result.tracker.isEmpty ? "Jackett" : result.tracker
+                    ),
+                    for: hash
+                )
+                addedResultIDs.insert(result.id)
+                onTorrentAdded?(hash)
+            } catch {
+                alert = LibraryAlert(
+                    title: SearchTexts(language: language).couldNotAdd,
+                    message: error.localizedDescription
+                )
+            }
+        }
+    }
+
+    func openJackett() {
+        guard let url = configuration.normalizedServerURL else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    func openJackettProject() {
+        guard let url = URL(string: "https://github.com/Jackett/Jackett") else {
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
+    func openDetails(for result: JackettSearchResult) {
+        guard let url = result.detailsURL else { return }
+        NSWorkspace.shared.open(url)
+    }
+}
+
+private final class JackettCredentialStore {
+    private let service = "\(Bundle.main.bundleIdentifier ?? "local.codex.torrserver-manager").jackett"
+    private let account = "api-key"
+
+    func read() -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecReturnData as String: true
+        ]
+        var result: CFTypeRef?
+        guard
+            SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+            let data = result as? Data,
+            let value = String(data: data, encoding: .utf8)
+        else {
+            return nil
+        }
+        return value
+    }
+
+    @discardableResult
+    func save(_ value: String) -> Bool {
+        if value.isEmpty {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: account
+            ]
+            let status = SecItemDelete(query as CFDictionary)
+            return status == errSecSuccess || status == errSecItemNotFound
+        }
+
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        let attributes: [String: Any] = [
+            kSecValueData as String: Data(value.utf8)
+        ]
+
+        let updateStatus = SecItemUpdate(
+            query as CFDictionary,
+            attributes as CFDictionary
+        )
+        if updateStatus == errSecSuccess {
+            return true
+        }
+        guard updateStatus == errSecItemNotFound else {
+            return false
+        }
+
+        var insert = query
+        insert[kSecValueData as String] = Data(value.utf8)
+        return SecItemAdd(insert as CFDictionary, nil) == errSecSuccess
+    }
+}

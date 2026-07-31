@@ -196,10 +196,18 @@ final class NativeTorrServerAPI {
         return try decoder.decode(NativeTorrent.self, from: data)
     }
 
-    func addMagnet(_ magnet: String) async throws -> NativeTorrent {
+    func addMagnet(
+        _ magnet: String,
+        title: String = "",
+        poster: String = "",
+        category: String = ""
+    ) async throws -> NativeTorrent {
         let data = try await postTorrents([
             "action": "add",
             "link": magnet,
+            "title": title,
+            "poster": poster,
+            "category": category,
             "save_to_db": true
         ])
         return try decoder.decode(NativeTorrent.self, from: data)
@@ -213,6 +221,19 @@ final class NativeTorrServerAPI {
     }
 
     func uploadTorrent(at fileURL: URL) async throws -> [NativeTorrent] {
+        try await uploadTorrent(
+            data: Data(contentsOf: fileURL),
+            filename: fileURL.lastPathComponent
+        )
+    }
+
+    func uploadTorrent(
+        data fileData: Data,
+        filename: String,
+        title: String = "",
+        poster: String = "",
+        category: String = ""
+    ) async throws -> [NativeTorrent] {
         let boundary = "TorrServer-\(UUID().uuidString)"
         var request = URLRequest(url: baseURL.appendingPathComponent("torrent/upload"))
         request.httpMethod = "POST"
@@ -222,12 +243,20 @@ final class NativeTorrServerAPI {
             forHTTPHeaderField: "Content-Type"
         )
 
-        let fileData = try Data(contentsOf: fileURL)
         var body = Data()
         body.appendMultipartField(name: "save", value: "true", boundary: boundary)
+        if !title.isEmpty {
+            body.appendMultipartField(name: "title", value: title, boundary: boundary)
+        }
+        if !poster.isEmpty {
+            body.appendMultipartField(name: "poster", value: poster, boundary: boundary)
+        }
+        if !category.isEmpty {
+            body.appendMultipartField(name: "category", value: category, boundary: boundary)
+        }
         body.appendMultipartFile(
             name: "file",
-            filename: fileURL.lastPathComponent,
+            filename: filename,
             contentType: "application/x-bittorrent",
             data: fileData,
             boundary: boundary
@@ -243,6 +272,21 @@ final class NativeTorrServerAPI {
             return [value]
         }
         return []
+    }
+
+    func updateMetadata(
+        hash: String,
+        title: String,
+        poster: String,
+        category: String
+    ) async throws {
+        _ = try await postTorrents([
+            "action": "set",
+            "hash": hash,
+            "title": title,
+            "poster": poster,
+            "category": category
+        ])
     }
 
     func streamURL(torrent: NativeTorrent, file: NativeTorrentFile) -> URL? {
