@@ -85,8 +85,8 @@ final class TorrServerDiagnosticsService {
             return DiagnosticResult(
                 kind: .failure,
                 message: language == .russian
-                    ? "Порт 8090 не отвечает: \(error.localizedDescription)"
-                    : "Port 8090 is not responding: \(error.localizedDescription)"
+                    ? "Порт 8090 не отвечает. TorrServer может быть остановлен, ещё запускаться или порт занят другим процессом."
+                    : "Port 8090 is not responding. TorrServer may be stopped, still starting, or the port may be used by another process."
             )
         }
     }
@@ -181,7 +181,9 @@ final class TorrServerDiagnosticsService {
                 return TorrServerProcessScan(
                     result: DiagnosticResult(
                         kind: .failure,
-                        message: error.localizedDescription
+                        message: language == .russian
+                            ? "Не удалось получить список процессов TorrServer."
+                            : "Could not inspect TorrServer processes."
                     ),
                     processes: [],
                     listenerPIDs: []
@@ -305,7 +307,12 @@ final class TorrServerDiagnosticsService {
                             : "Executable can run, but arm64 was not detected: \(type)")
                 )
             } catch {
-                return DiagnosticResult(kind: .warning, message: error.localizedDescription)
+                return DiagnosticResult(
+                    kind: .warning,
+                    message: language == .russian
+                        ? "Файл найден, но определить его архитектуру не удалось."
+                        : "The executable was found, but its architecture could not be determined."
+                )
             }
         }.value
     }

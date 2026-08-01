@@ -61,6 +61,7 @@ final class MainWindowModel: ObservableObject {
     var onDownload: (() -> Void)?
     var onStart: (() -> Void)?
     var onStop: (() -> Void)?
+    var onOpenContacts: (() -> Void)?
     var onOpenWeb: (() -> Void)?
     var onLaunchAtLoginChanged: ((Bool) -> Void)?
     var onAutoStartChanged: ((Bool) -> Void)?
@@ -503,6 +504,7 @@ private struct DiagnosticsPopover: View {
                 Image(systemName: "stethoscope")
                     .font(.system(size: 22, weight: .semibold))
                     .foregroundStyle(Color.accentColor)
+                    .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(model.language == .russian ? "Диагностика TorrServer" : "TorrServer diagnostics")
@@ -539,6 +541,7 @@ private struct DiagnosticsPopover: View {
                 DiagnosticCheckRow(
                     title: model.language == .russian ? "Порт 8090" : "Port 8090",
                     fallbackMessage: model.language == .russian ? "Доступность API TorrServer" : "TorrServer API availability",
+                    checkTitle: model.language == .russian ? "Проверить" : "Check",
                     systemImage: "network",
                     result: model.portDiagnostic,
                     isDisabled: isChecking,
@@ -550,6 +553,7 @@ private struct DiagnosticsPopover: View {
                 DiagnosticCheckRow(
                     title: processTitle,
                     fallbackMessage: model.language == .russian ? "Копии приложения и TorrServer вне текущего окна" : "App and TorrServer copies outside this window",
+                    checkTitle: model.language == .russian ? "Проверить" : "Check",
                     systemImage: "square.stack.3d.up",
                     result: model.processDiagnostic,
                     isDisabled: isChecking,
@@ -561,6 +565,7 @@ private struct DiagnosticsPopover: View {
                 DiagnosticCheckRow(
                     title: model.language == .russian ? "Исполняемый файл" : "Executable",
                     fallbackMessage: model.language == .russian ? "Путь, права запуска и архитектура arm64" : "Path, execution permission, and arm64 architecture",
+                    checkTitle: model.language == .russian ? "Проверить" : "Check",
                     systemImage: "checkmark.shield",
                     result: model.executableDiagnostic,
                     isDisabled: isChecking,
@@ -687,6 +692,7 @@ private struct DiagnosticsPopover: View {
 private struct DiagnosticCheckRow: View {
     let title: String
     let fallbackMessage: String
+    let checkTitle: String
     let systemImage: String
     let result: DiagnosticResult
     let isDisabled: Bool
@@ -698,6 +704,7 @@ private struct DiagnosticCheckRow: View {
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(resultColor)
                 .frame(width: 20)
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
@@ -716,7 +723,8 @@ private struct DiagnosticCheckRow: View {
             }
             .buttonStyle(.borderless)
             .disabled(isDisabled || result.kind == .checking)
-            .help("Check")
+            .help(checkTitle)
+            .accessibilityLabel(checkTitle)
         }
         .padding(.vertical, 9)
     }

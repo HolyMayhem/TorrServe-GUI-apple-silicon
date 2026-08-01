@@ -330,6 +330,10 @@ struct SearchView: View {
                 }
                 .disabled(model.configuration.normalizedServerURL == nil)
 
+                Button(texts.installJackett) {
+                    model.installJackett()
+                }
+
                 Spacer()
 
                 Button(texts.saveAndCheck) {
@@ -717,6 +721,9 @@ struct SearchTexts {
             : "The API key is shown near the top of the Jackett dashboard."
     }
     var openJackett: String { language == .russian ? "Открыть Jackett" : "Open Jackett" }
+    var installJackett: String {
+        language == .russian ? "Установить Jackett" : "Install Jackett"
+    }
     var saveAndCheck: String {
         language == .russian ? "Сохранить и проверить" : "Save & Test"
     }

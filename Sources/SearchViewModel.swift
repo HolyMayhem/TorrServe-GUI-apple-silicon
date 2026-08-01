@@ -257,6 +257,13 @@ final class SearchViewModel: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
+    func installJackett() {
+        guard let url = URL(string: "https://github.com/Jackett/Jackett/releases/latest") else {
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
     func openJackettProject() {
         guard let url = URL(string: "https://github.com/Jackett/Jackett") else {
             return

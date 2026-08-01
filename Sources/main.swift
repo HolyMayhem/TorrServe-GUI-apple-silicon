@@ -16,6 +16,7 @@ private let languageKey = "AppLanguage"
 private let notificationsEnabledKey = "NotificationsEnabled"
 private let speedDisplayUnitKey = "SpeedDisplayUnit"
 private let jackettSearchEnabledKey = "JackettSearchEnabled"
+private let contactsURL = URL(string: "https://t.me/holymayhem")!
 private let iinaDownloadURL = URL(string: "https://iina.io/download/")!
 private let vlcDownloadURL = URL(
     string: "https://www.videolan.org/vlc/download-macosx.html"
@@ -969,6 +970,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var speedHistory: [Double] = []
     private var hasAnnouncedRunningState = false
     private var menuBarAnimationPhase: CGFloat = 0
+    private var diagnosticsRevision = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         registerDefaultSettings()
@@ -1142,10 +1144,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func setLanguage(_ language: AppLanguage) {
+        let shouldRefreshDiagnostics = mainWindowModel.isRunningDiagnostics
+            || mainWindowModel.portDiagnostic.kind != .idle
+            || mainWindowModel.processDiagnostic.kind != .idle
+            || mainWindowModel.executableDiagnostic.kind != .idle
+
+        diagnosticsRevision &+= 1
         currentLanguage = language
+        mainWindowModel.isRunningDiagnostics = false
+        mainWindowModel.isStoppingExternalProcesses = false
+        mainWindowModel.portDiagnostic = .idle
+        mainWindowModel.processDiagnostic = .idle
+        mainWindowModel.processScan = .empty
+        mainWindowModel.executableDiagnostic = .idle
+        mainWindowModel.latestDiagnostic = .idle
         applyLanguage()
         updateUI(for: processController.state)
         updatePopoverMaterial(with: currentTorrents)
+
+        if shouldRefreshDiagnostics {
+            runFullDiagnostics()
+        }
     }
 
     private func setNotificationsEnabled(_ enabled: Bool) {
@@ -1183,10 +1202,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     @objc private func showAboutPanel(_ sender: Any?) {
         let version = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"
-        ) as? String ?? "2.5.0"
+        ) as? String ?? "2.5.1"
         let build = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleVersion"
-        ) as? String ?? "28"
+        ) as? String ?? "29"
         let credits = NSAttributedString(
             string: texts.aboutCredits,
             attributes: [
@@ -1298,6 +1317,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         mainWindowModel.onDownload = { [weak self] in self?.downloadLatestTorrServer(nil) }
         mainWindowModel.onStart = { [weak self] in self?.startServer(nil) }
         mainWindowModel.onStop = { [weak self] in self?.stopServer(nil) }
+        mainWindowModel.onOpenContacts = {
+            NSWorkspace.shared.open(contactsURL)
+        }
         mainWindowModel.onOpenWeb = { [weak self] in self?.openWebUI(nil) }
         mainWindowModel.onLaunchAtLoginChanged = { [weak self] enabled in
             self?.setLaunchAtLogin(enabled)
@@ -1789,6 +1811,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func checkTorrServerPort() {
+        let revision = diagnosticsRevision
+        let language = currentLanguage
         mainWindowModel.portDiagnostic = DiagnosticResult(
             kind: .checking,
             message: ""
@@ -1796,14 +1820,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         mainWindowModel.latestDiagnostic = mainWindowModel.portDiagnostic
         Task { [weak self] in
             guard let self else { return }
-            self.mainWindowModel.portDiagnostic = await self.diagnosticsService.checkPort(
-                language: self.currentLanguage
-            )
+            let result = await self.diagnosticsService.checkPort(language: language)
+            guard revision == self.diagnosticsRevision else { return }
+            self.mainWindowModel.portDiagnostic = result
             self.mainWindowModel.latestDiagnostic = self.mainWindowModel.portDiagnostic
         }
     }
 
     private func findOtherTorrServerProcesses() {
+        let revision = diagnosticsRevision
+        let language = currentLanguage
         mainWindowModel.processDiagnostic = DiagnosticResult(
             kind: .checking,
             message: ""
@@ -1813,8 +1839,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             guard let self else { return }
             let scan = await self.diagnosticsService.scanTorrServerProcesses(
                 managedPID: self.processController.runningPID,
-                language: self.currentLanguage
+                language: language
             )
+            guard revision == self.diagnosticsRevision else { return }
             self.mainWindowModel.processScan = scan
             self.mainWindowModel.processDiagnostic = scan.result
             self.mainWindowModel.latestDiagnostic = scan.result
@@ -1823,13 +1850,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private func runFullDiagnostics() {
         guard !mainWindowModel.isRunningDiagnostics else { return }
+        let revision = diagnosticsRevision
         Task { [weak self] in
-            await self?.performFullDiagnostics()
+            await self?.performFullDiagnostics(revision: revision)
         }
     }
 
-    private func performFullDiagnostics() async {
-        guard !mainWindowModel.isRunningDiagnostics else { return }
+    private func performFullDiagnostics(revision: Int? = nil) async {
+        let revision = revision ?? diagnosticsRevision
+        guard revision == diagnosticsRevision,
+              !mainWindowModel.isRunningDiagnostics else { return }
 
         mainWindowModel.isRunningDiagnostics = true
         let checking = DiagnosticResult(kind: .checking, message: "")
@@ -1855,6 +1885,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         async let storage = diagnosticsService.storageSnapshot(torrents: torrents)
 
         let results = await (port, processScan, executable, storage)
+        guard revision == diagnosticsRevision else { return }
         mainWindowModel.portDiagnostic = results.0
         mainWindowModel.processScan = results.1
         mainWindowModel.processDiagnostic = results.1.result
@@ -1902,6 +1933,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private func stopExternalTorrServerProcesses() {
         guard !mainWindowModel.isStoppingExternalProcesses else { return }
+        let revision = diagnosticsRevision
+        let language = currentLanguage
         let requestedPIDs = Set(mainWindowModel.processScan.processes.map(\.pid))
         mainWindowModel.isStoppingExternalProcesses = true
         mainWindowModel.latestDiagnostic = DiagnosticResult(
@@ -1914,12 +1947,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             let result = await self.diagnosticsService.stopExternalProcesses(
                 requestedPIDs: requestedPIDs,
                 managedPID: self.processController.runningPID,
-                language: self.currentLanguage
+                language: language
             )
             let refreshedScan = await self.diagnosticsService.scanTorrServerProcesses(
                 managedPID: self.processController.runningPID,
-                language: self.currentLanguage
+                language: language
             )
+            guard revision == self.diagnosticsRevision else { return }
             self.mainWindowModel.processScan = refreshedScan
             self.mainWindowModel.processDiagnostic = refreshedScan.result
             self.mainWindowModel.latestDiagnostic = result
@@ -1928,6 +1962,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func checkTorrServerExecutable() {
+        let revision = diagnosticsRevision
+        let language = currentLanguage
         mainWindowModel.executableDiagnostic = DiagnosticResult(
             kind: .checking,
             message: ""
@@ -1936,9 +1972,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let path = executablePath
         Task { [weak self] in
             guard let self else { return }
-            self.mainWindowModel.executableDiagnostic = await self.diagnosticsService
-                .inspectExecutable(path: path, language: self.currentLanguage)
-            self.mainWindowModel.latestDiagnostic = self.mainWindowModel.executableDiagnostic
+            let result = await self.diagnosticsService.inspectExecutable(
+                path: path,
+                language: language
+            )
+            guard revision == self.diagnosticsRevision else { return }
+            self.mainWindowModel.executableDiagnostic = result
+            self.mainWindowModel.latestDiagnostic = result
         }
     }
 
@@ -2012,7 +2052,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             } catch {
                 self.mainWindowModel.latestDiagnostic = DiagnosticResult(
                     kind: .failure,
-                    message: error.localizedDescription
+                    message: self.currentLanguage == .russian
+                        ? "Не удалось сохранить отчёт диагностики."
+                        : "Could not save the diagnostic report."
                 )
             }
         }

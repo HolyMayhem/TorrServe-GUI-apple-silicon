@@ -178,9 +178,20 @@ private struct ApplicationHeader: View {
                 Text("TorrServer")
                     .font(.system(size: 24, weight: .semibold, design: .rounded))
                     .fixedSize()
-                Text("Holy Mayhem")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Button {
+                    model.onOpenContacts?()
+                } label: {
+                    Text("Holy Mayhem")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .accessibilityLabel(
+                    model.language == .russian
+                        ? "Связаться с Holy Mayhem"
+                        : "Contact Holy Mayhem"
+                )
             }
             .layoutPriority(3)
 
