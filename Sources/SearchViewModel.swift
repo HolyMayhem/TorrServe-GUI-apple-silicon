@@ -1,6 +1,5 @@
 import AppKit
 import Foundation
-import Security
 
 private let jackettServerURLKey = "JackettServerURL"
 private let jackettAPIKeyKey = "JackettAPIKey"
@@ -50,19 +49,12 @@ final class SearchViewModel: ObservableObject {
             ?? "http://127.0.0.1:9117"
         let legacyAPIKey = UserDefaults.standard.string(forKey: jackettAPIKeyKey)
             ?? ""
-        apiKey = legacyAPIKey
-        let credentialStore = self.credentialStore
-
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let storedAPIKey = credentialStore.read()
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                if let storedAPIKey, !storedAPIKey.isEmpty {
-                    self.apiKey = storedAPIKey
-                } else if !legacyAPIKey.isEmpty,
-                          credentialStore.save(legacyAPIKey) {
-                    UserDefaults.standard.removeObject(forKey: jackettAPIKeyKey)
-                }
+        if let storedAPIKey = credentialStore.read(), !storedAPIKey.isEmpty {
+            apiKey = storedAPIKey
+        } else {
+            apiKey = legacyAPIKey
+            if !legacyAPIKey.isEmpty, credentialStore.save(legacyAPIKey) {
+                UserDefaults.standard.removeObject(forKey: jackettAPIKeyKey)
             }
         }
     }
@@ -288,63 +280,70 @@ final class SearchViewModel: ObservableObject {
     }
 }
 
-private final class JackettCredentialStore: @unchecked Sendable {
-    private let service = "\(Bundle.main.bundleIdentifier ?? "local.codex.torrserver-manager").jackett"
-    private let account = "api-key"
+private final class JackettCredentialStore {
+    private struct Payload: Codable {
+        let apiKey: String
+    }
+
+    private let fileManager = FileManager.default
+
+    private var directoryURL: URL? {
+        fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?
+            .appendingPathComponent("TorrServer", isDirectory: true)
+            .appendingPathComponent("Settings", isDirectory: true)
+    }
+
+    private var credentialsURL: URL? {
+        directoryURL?.appendingPathComponent("jackett.json", isDirectory: false)
+    }
 
     func read() -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecReturnData as String: true
-        ]
-        var result: CFTypeRef?
         guard
-            SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-            let data = result as? Data,
-            let value = String(data: data, encoding: .utf8)
+            let credentialsURL,
+            let data = try? Data(contentsOf: credentialsURL),
+            let payload = try? JSONDecoder().decode(Payload.self, from: data)
         else {
             return nil
         }
-        return value
+        return payload.apiKey
     }
 
     @discardableResult
     func save(_ value: String) -> Bool {
+        guard let directoryURL, let credentialsURL else { return false }
+
         if value.isEmpty {
-            let query: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: service,
-                kSecAttrAccount as String: account
-            ]
-            let status = SecItemDelete(query as CFDictionary)
-            return status == errSecSuccess || status == errSecItemNotFound
+            guard fileManager.fileExists(atPath: credentialsURL.path) else {
+                return true
+            }
+            do {
+                try fileManager.removeItem(at: credentialsURL)
+                return true
+            } catch {
+                return false
+            }
         }
 
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account
-        ]
-        let attributes: [String: Any] = [
-            kSecValueData as String: Data(value.utf8)
-        ]
-
-        let updateStatus = SecItemUpdate(
-            query as CFDictionary,
-            attributes as CFDictionary
-        )
-        if updateStatus == errSecSuccess {
+        do {
+            try fileManager.createDirectory(
+                at: directoryURL,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: NSNumber(value: 0o700)]
+            )
+            try fileManager.setAttributes(
+                [.posixPermissions: NSNumber(value: 0o700)],
+                ofItemAtPath: directoryURL.path
+            )
+            let data = try JSONEncoder().encode(Payload(apiKey: value))
+            try data.write(to: credentialsURL, options: .atomic)
+            try fileManager.setAttributes(
+                [.posixPermissions: NSNumber(value: 0o600)],
+                ofItemAtPath: credentialsURL.path
+            )
             return true
-        }
-        guard updateStatus == errSecItemNotFound else {
+        } catch {
             return false
         }
-
-        var insert = query
-        insert[kSecValueData as String] = Data(value.utf8)
-        return SecItemAdd(insert as CFDictionary, nil) == errSecSuccess
     }
 }

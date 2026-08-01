@@ -16,9 +16,9 @@
       "problemMatcher": "$swiftc"
     },
     {
-      "label": "App: Package ZIP",
+      "label": "App: Package DMG",
       "type": "shell",
-      "command": "./scripts/package-zip.sh",
+      "command": "./scripts/package-dmg.sh",
       "group": "build",
       "problemMatcher": []
     }

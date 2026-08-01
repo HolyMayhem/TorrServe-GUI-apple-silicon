@@ -14,6 +14,16 @@ PARTIAL_INFO_PLIST="$GENERATED_DIR/AppIcon-Info.plist"
 SOURCE_ICON="$PROJECT_DIR/Resources/AppIcon.icon"
 XCODE_DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 ACTOOL="$XCODE_DEVELOPER_DIR/usr/bin/actool"
+TORRSERVER_ASSET_NAME="TorrServer-darwin-arm64"
+TORRSERVER_DOWNLOAD_URL="https://github.com/YouROK/TorrServer/releases/latest/download/$TORRSERVER_ASSET_NAME"
+TORRSERVER_CACHE_DIR="$GENERATED_DIR/TorrServer"
+TORRSERVER_CACHE_PATH="$TORRSERVER_CACHE_DIR/$TORRSERVER_ASSET_NAME"
+SIGNING_DIR="$(mktemp -d /tmp/torrserver-app-sign.XXXXXX)"
+
+cleanup() {
+  rm -rf "$SIGNING_DIR"
+}
+trap cleanup EXIT
 
 find "$PROJECT_DIR/Resources" -name ".DS_Store" -type f -delete
 
@@ -33,7 +43,39 @@ BIN_DIR="$(swift build -c release --package-path "$PROJECT_DIR" --show-bin-path)
 rm -rf "$APP_PATH"
 rm -rf "$COMPILED_ICON_DIR"
 rm -f "$GENERATED_DIR/AppIconSystemDark.icns" "$PARTIAL_INFO_PLIST"
-mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$COMPILED_ICON_DIR"
+mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$COMPILED_ICON_DIR" "$TORRSERVER_CACHE_DIR"
+
+if [[ -n "${TORRSERVER_EXECUTABLE:-}" ]]; then
+  if [[ ! -f "$TORRSERVER_EXECUTABLE" ]]; then
+    echo "TORRSERVER_EXECUTABLE does not point to a file: $TORRSERVER_EXECUTABLE" >&2
+    exit 1
+  fi
+  cp "$TORRSERVER_EXECUTABLE" "$TORRSERVER_CACHE_PATH"
+else
+  TORRSERVER_TEMP_PATH="$TORRSERVER_CACHE_PATH.download"
+  rm -f "$TORRSERVER_TEMP_PATH"
+  if curl \
+    --fail \
+    --location \
+    --silent \
+    --show-error \
+    --retry 3 \
+    --output "$TORRSERVER_TEMP_PATH" \
+    "$TORRSERVER_DOWNLOAD_URL"; then
+    mv "$TORRSERVER_TEMP_PATH" "$TORRSERVER_CACHE_PATH"
+  elif [[ ! -f "$TORRSERVER_CACHE_PATH" ]]; then
+    echo "Could not download the bundled TorrServer executable." >&2
+    exit 1
+  else
+    echo "Warning: using the cached TorrServer executable." >&2
+  fi
+fi
+
+if ! file "$TORRSERVER_CACHE_PATH" | grep -Eq 'Mach-O.*arm64'; then
+  echo "The bundled TorrServer executable is not a macOS arm64 binary." >&2
+  exit 1
+fi
+chmod 755 "$TORRSERVER_CACHE_PATH"
 
 DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" "$ACTOOL" \
   --compile "$COMPILED_ICON_DIR" \
@@ -55,12 +97,20 @@ cp "$PROJECT_DIR/Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
 cp "$PROJECT_DIR/Resources/PkgInfo" "$CONTENTS_DIR/PkgInfo"
 cp "$COMPILED_ICON_DIR/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
 cp "$COMPILED_ICON_DIR/Assets.car" "$RESOURCES_DIR/Assets.car"
+cp "$TORRSERVER_CACHE_PATH" "$RESOURCES_DIR/$TORRSERVER_ASSET_NAME"
+chmod 755 "$RESOURCES_DIR/$TORRSERVER_ASSET_NAME"
 
 chflags -R nohidden "$APP_PATH" 2>/dev/null || true
-xattr -cr "$APP_PATH" 2>/dev/null || true
+SIGNED_APP_PATH="$SIGNING_DIR/$APP_NAME"
+ditto --norsrc "$APP_PATH" "$SIGNED_APP_PATH"
+xattr -cr "$SIGNED_APP_PATH" 2>/dev/null || true
+codesign --force --sign - "$SIGNED_APP_PATH/Contents/Resources/$TORRSERVER_ASSET_NAME"
+codesign --force --sign - --deep "$SIGNED_APP_PATH"
+codesign --verify --deep --strict "$SIGNED_APP_PATH"
+
+rm -rf "$APP_PATH"
+ditto --norsrc "$SIGNED_APP_PATH" "$APP_PATH"
 xattr -d com.apple.FinderInfo "$APP_PATH" 2>/dev/null || true
-codesign --force --sign - --deep "$APP_PATH"
-xattr -cr "$APP_PATH" 2>/dev/null || true
-xattr -d com.apple.FinderInfo "$APP_PATH" 2>/dev/null || true
+xattr -d 'com.apple.fileprovider.fpfs#P' "$APP_PATH" 2>/dev/null || true
 
 echo "$APP_PATH"

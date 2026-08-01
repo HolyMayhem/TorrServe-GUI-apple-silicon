@@ -16,11 +16,50 @@ private let languageKey = "AppLanguage"
 private let notificationsEnabledKey = "NotificationsEnabled"
 private let speedDisplayUnitKey = "SpeedDisplayUnit"
 private let jackettSearchEnabledKey = "JackettSearchEnabled"
+private let productionBundleIdentifier = "com.holymayhem.torrserver"
+private let legacyBundleIdentifier = "local.codex.torrserver-manager"
+private let preferencesMigrationKey = "MigratedPreferencesFromLocalCodex"
+private let torrServerExecutableName = "TorrServer-darwin-arm64"
 private let contactsURL = URL(string: "https://t.me/holymayhem")!
 private let iinaDownloadURL = URL(string: "https://iina.io/download/")!
 private let vlcDownloadURL = URL(
     string: "https://www.videolan.org/vlc/download-macosx.html"
 )!
+
+private func migrateLegacyPreferencesIfNeeded() {
+    guard Bundle.main.bundleIdentifier == productionBundleIdentifier else { return }
+
+    let current = UserDefaults.standard
+    guard !current.bool(forKey: preferencesMigrationKey) else { return }
+
+    if let legacy = UserDefaults(suiteName: legacyBundleIdentifier) {
+        let keys = [
+            savedPathKey,
+            autoStartServerKey,
+            showSpeedInMenuBarKey,
+            hideDockIconKey,
+            languageKey,
+            notificationsEnabledKey,
+            speedDisplayUnitKey,
+            jackettSearchEnabledKey,
+            "JackettServerURL",
+            "JackettAPIKey",
+            "LibraryPreferredPlayer",
+            "LibraryCustomPlayerPath",
+            "LibraryPlayerSetupCompleted",
+            "LibraryDisplayMode",
+            "LibraryMetadataByTorrentHash"
+        ]
+
+        for key in keys where current.object(forKey: key) == nil {
+            if let value = legacy.object(forKey: key) {
+                current.set(value, forKey: key)
+            }
+        }
+    }
+
+    current.set(true, forKey: preferencesMigrationKey)
+}
 
 struct AppError: LocalizedError {
     let message: String
@@ -305,7 +344,7 @@ final class TorrServerProcessController {
 
         let newTask = Process()
         newTask.executableURL = executableURL
-        newTask.currentDirectoryURL = executableURL.deletingLastPathComponent()
+        newTask.currentDirectoryURL = try serverDataDirectoryURL()
         newTask.standardOutput = FileHandle.nullDevice
         newTask.standardError = FileHandle.nullDevice
         newTask.terminationHandler = { [weak self] finishedTask in
@@ -402,13 +441,30 @@ final class TorrServerProcessController {
             throw AppError("macOS не разрешила сделать выбранный файл исполняемым.")
         }
     }
+
+    private func serverDataDirectoryURL() throws -> URL {
+        guard let applicationSupportURL = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else {
+            throw AppError("Не удалось найти папку Application Support.")
+        }
+
+        let directoryURL = applicationSupportURL
+            .appendingPathComponent("TorrServer Manager", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directoryURL,
+            withIntermediateDirectories: true
+        )
+        return directoryURL
+    }
 }
 
 final class TorrServerDownloader {
     private let latestReleaseURL = URL(
         string: "https://api.github.com/repos/YouROK/TorrServer/releases/latest"
     )!
-    private let assetName = "TorrServer-darwin-arm64"
+    private let assetName = torrServerExecutableName
 
     func downloadLatestDarwinArm64(completion: @escaping (Result<URL, Error>) -> Void) {
         URLSession.shared.dataTask(with: latestReleaseURL) { [assetName] data, _, error in
@@ -503,7 +559,8 @@ final class TorrServerDownloader {
 }
 
 final class LaunchAtLoginController {
-    private let label = "local.codex.torrserver-manager.login"
+    private let label = "com.holymayhem.torrserver.login"
+    private let legacyLabel = "local.codex.torrserver-manager.login"
 
     var isEnabled: Bool {
         FileManager.default.fileExists(atPath: plistURL.path)
@@ -517,7 +574,25 @@ final class LaunchAtLoginController {
         }
     }
 
+    func migrateLegacyAgentIfNeeded() {
+        let legacyURL = launchAgentURL(label: legacyLabel)
+        guard FileManager.default.fileExists(atPath: legacyURL.path) else { return }
+
+        do {
+            if !isEnabled {
+                try installLaunchAgent()
+            }
+            try FileManager.default.removeItem(at: legacyURL)
+        } catch {
+            // Keep the old agent intact if migration cannot be completed safely.
+        }
+    }
+
     private var plistURL: URL {
+        launchAgentURL(label: label)
+    }
+
+    private func launchAgentURL(label: String) -> URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library", isDirectory: true)
             .appendingPathComponent("LaunchAgents", isDirectory: true)
@@ -974,6 +1049,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         registerDefaultSettings()
+        launchAtLoginController.migrateLegacyAgentIfNeeded()
         applyActivationPolicy()
         buildMainMenu()
         buildStatusItem()
@@ -1303,7 +1379,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         window.hasShadow = true
         window.standardWindowButton(.zoomButton)?.isEnabled = false
 
-        mainWindowModel.path = UserDefaults.standard.string(forKey: savedPathKey) ?? ""
+        mainWindowModel.path = initialExecutablePath()
         mainWindowModel.language = currentLanguage
         mainWindowModel.jackettEnabled = UserDefaults.standard.bool(
             forKey: jackettSearchEnabledKey
@@ -2480,6 +2556,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         return String(format: "%.0f MB", value / 1024 / 1024)
     }
 
+    private func initialExecutablePath() -> String {
+        let savedPath = UserDefaults.standard.string(forKey: savedPathKey) ?? ""
+        let bundledPath = Bundle.main.url(
+            forResource: torrServerExecutableName,
+            withExtension: nil
+        )?.path
+
+        guard let bundledPath else { return savedPath }
+        guard !savedPath.isEmpty else { return bundledPath }
+
+        let normalizedSavedPath = URL(fileURLWithPath: savedPath).standardizedFileURL.path
+        let oldManagedSuffix = "/Library/Application Support/TorrServer Manager/\(torrServerExecutableName)"
+        if normalizedSavedPath.hasSuffix(oldManagedSuffix)
+            || !FileManager.default.fileExists(atPath: normalizedSavedPath) {
+            return bundledPath
+        }
+        return normalizedSavedPath
+    }
+
     private func saveCurrentPath() {
         UserDefaults.standard.set(executablePath, forKey: savedPathKey)
     }
@@ -2493,6 +2588,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         alert.runModal()
     }
 }
+
+migrateLegacyPreferencesIfNeeded()
 
 let app = NSApplication.shared
 let appDelegate = MainActor.assumeIsolated {
