@@ -1,7 +1,0 @@
-{
-  "swift.path": "/usr/bin/swift",
-  "swift.buildArguments": [
-    "-c",
-    "debug"
-  ]
-}
