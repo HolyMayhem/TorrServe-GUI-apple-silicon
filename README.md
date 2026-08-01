@@ -67,10 +67,11 @@
 
 ## Иконка
 
-Иконка хранится только в `Resources/AppIcon.iconset` как стандартный набор из
-десяти PNG: от `icon_16x16.png` до `icon_512x512@2x.png`. Во время сборки
-`scripts/build-app.sh` передаёт этот iconset напрямую системному `iconutil` и
-создаёт `build/generated/AppIconSystemDark.icns` для пакета приложения.
+Единственный исходник иконки — многослойный документ Icon Composer
+`Resources/AppIcon.icon`. Во время сборки официальный `actool` из Xcode создаёт
+`Assets.car` с адаптивными вариантами Default, Dark и Mono, а также
+`AppIcon.icns` для совместимости с предыдущими версиями macOS. Вручную
+поддерживаемые PNG-наборы и самописный рендерер не используются.
 
 ## Использование
 

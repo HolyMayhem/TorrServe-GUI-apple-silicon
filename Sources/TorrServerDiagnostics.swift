@@ -16,6 +16,45 @@ struct DiagnosticResult: Equatable {
     static let idle = DiagnosticResult(kind: .idle, message: "")
 }
 
+enum DiagnosticProcessKind: Equatable {
+    case application
+    case server
+    case portOwner
+
+    func title(language: AppLanguage) -> String {
+        switch self {
+        case .application:
+            return language == .russian ? "копия приложения" : "app copy"
+        case .server:
+            return language == .russian ? "процесс TorrServer" : "TorrServer process"
+        case .portOwner:
+            return language == .russian ? "владелец порта 8090" : "port 8090 owner"
+        }
+    }
+}
+
+struct DiagnosticProcessInfo: Identifiable, Equatable {
+    let pid: Int32
+    let parentPID: Int32
+    let command: String
+    let kind: DiagnosticProcessKind
+    let listensOnPort8090: Bool
+
+    var id: Int32 { pid }
+}
+
+struct TorrServerProcessScan: Equatable {
+    let result: DiagnosticResult
+    let processes: [DiagnosticProcessInfo]
+    let listenerPIDs: [Int32]
+
+    static let empty = TorrServerProcessScan(
+        result: .idle,
+        processes: [],
+        listenerPIDs: []
+    )
+}
+
 struct TorrServerStorageSnapshot: Equatable {
     var cacheUsed: Int64 = 0
     var cacheCapacity: Int64 = 0
@@ -51,32 +90,175 @@ final class TorrServerDiagnosticsService {
         }
     }
 
-    func findTorrServerProcesses(language: AppLanguage) async -> DiagnosticResult {
+    func scanTorrServerProcesses(
+        managedPID: Int32?,
+        language: AppLanguage
+    ) async -> TorrServerProcessScan {
         await Task.detached(priority: .userInitiated) {
             do {
-                let output = try Self.run("/bin/ps", arguments: ["-axo", "pid=,command="])
-                let matches = output.split(separator: "\n").filter {
-                    $0.localizedCaseInsensitiveContains("TorrServer")
-                        && !$0.localizedCaseInsensitiveContains("TorrServer.app")
-                }
-                guard !matches.isEmpty else {
-                    return DiagnosticResult(
-                        kind: .warning,
-                        message: language == .russian
-                            ? "Других процессов TorrServer не найдено."
-                            : "No other TorrServer process was found."
+                let rows = try Self.processRows()
+                let listenerPIDs = Self.port8090ListenerPIDs()
+                let currentPID = Int32(ProcessInfo.processInfo.processIdentifier)
+                var matches: [DiagnosticProcessInfo] = []
+
+                for row in rows {
+                    guard row.pid != currentPID, row.pid != managedPID else { continue }
+
+                    let lowercased = row.command.lowercased()
+                    let kind: DiagnosticProcessKind?
+                    if lowercased.contains("torrservermanager") {
+                        kind = .application
+                    } else if lowercased.contains("torrserver-darwin-")
+                                || lowercased.hasSuffix("/torrserver")
+                                || lowercased.hasSuffix(" torrserver") {
+                        kind = .server
+                    } else if listenerPIDs.contains(row.pid) {
+                        kind = .portOwner
+                    } else {
+                        kind = nil
+                    }
+
+                    guard let kind else { continue }
+                    matches.append(
+                        DiagnosticProcessInfo(
+                            pid: row.pid,
+                            parentPID: row.parentPID,
+                            command: row.command,
+                            kind: kind,
+                            listensOnPort8090: listenerPIDs.contains(row.pid)
+                        )
                     )
                 }
-                return DiagnosticResult(
-                    kind: .success,
-                    message: (language == .russian ? "Найдено: " : "Found: ") + matches.map {
-                        $0.trimmingCharacters(in: .whitespaces)
-                    }.joined(separator: " · ")
+
+                matches.sort {
+                    if $0.kind == .application, $1.kind != .application { return true }
+                    if $0.kind != .application, $1.kind == .application { return false }
+                    return $0.pid < $1.pid
+                }
+
+                guard !matches.isEmpty else {
+                    let portDescription: String
+                    if let managedPID, listenerPIDs.contains(managedPID) {
+                        portDescription = language == .russian
+                            ? " Порт 8090 принадлежит текущему серверу (PID \(managedPID))."
+                            : " Port 8090 belongs to this app's server (PID \(managedPID))."
+                    } else if let owner = listenerPIDs.first {
+                        portDescription = language == .russian
+                            ? " Порт 8090 занят PID \(owner), но процесс уже недоступен для проверки."
+                            : " Port 8090 is owned by PID \(owner), but the process is no longer available for inspection."
+                    } else {
+                        portDescription = ""
+                    }
+
+                    return TorrServerProcessScan(
+                        result: DiagnosticResult(
+                            kind: .success,
+                            message: (language == .russian
+                                ? "Внешних копий не найдено."
+                                : "No external copies found.") + portDescription
+                        ),
+                        processes: [],
+                        listenerPIDs: listenerPIDs
+                    )
+                }
+
+                let summary = matches.map { process in
+                    let port = process.listensOnPort8090 ? " · :8090" : ""
+                    return "\(process.kind.title(language: language)) PID \(process.pid)\(port)"
+                }.joined(separator: "; ")
+
+                return TorrServerProcessScan(
+                    result: DiagnosticResult(
+                        kind: .warning,
+                        message: (language == .russian
+                            ? "Найдены внешние процессы: "
+                            : "External processes found: ") + summary
+                    ),
+                    processes: matches,
+                    listenerPIDs: listenerPIDs
                 )
             } catch {
-                return DiagnosticResult(kind: .failure, message: error.localizedDescription)
+                return TorrServerProcessScan(
+                    result: DiagnosticResult(
+                        kind: .failure,
+                        message: error.localizedDescription
+                    ),
+                    processes: [],
+                    listenerPIDs: []
+                )
             }
         }.value
+    }
+
+    func stopExternalProcesses(
+        requestedPIDs: Set<Int32>,
+        managedPID: Int32?,
+        language: AppLanguage
+    ) async -> DiagnosticResult {
+        let verified = await scanTorrServerProcesses(
+            managedPID: managedPID,
+            language: language
+        )
+        let safeProcesses = verified.processes.filter {
+            requestedPIDs.isEmpty || requestedPIDs.contains($0.pid)
+        }
+
+        guard !safeProcesses.isEmpty else {
+            return DiagnosticResult(
+                kind: .success,
+                message: language == .russian
+                    ? "Внешние копии уже остановлены."
+                    : "External copies are already stopped."
+            )
+        }
+
+        let signaledPIDs = await Task.detached(priority: .userInitiated) {
+            safeProcesses.compactMap { process -> Int32? in
+                Darwin.kill(process.pid, SIGTERM) == 0 ? process.pid : nil
+            }
+        }.value
+
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+
+        let remaining = await scanTorrServerProcesses(
+            managedPID: managedPID,
+            language: language
+        )
+        let remainingPIDs = Set(remaining.processes.map(\.pid))
+            .intersection(signaledPIDs)
+
+        if !remainingPIDs.isEmpty {
+            await Task.detached(priority: .userInitiated) {
+                for pid in remainingPIDs {
+                    Darwin.kill(pid, SIGKILL)
+                }
+            }.value
+            try? await Task.sleep(nanoseconds: 350_000_000)
+        }
+
+        let finalScan = await scanTorrServerProcesses(
+            managedPID: managedPID,
+            language: language
+        )
+        let failedPIDs = Set(finalScan.processes.map(\.pid))
+            .intersection(Set(safeProcesses.map(\.pid)))
+
+        guard failedPIDs.isEmpty else {
+            return DiagnosticResult(
+                kind: .failure,
+                message: language == .russian
+                    ? "Не удалось остановить PID: \(failedPIDs.sorted().map(String.init).joined(separator: ", "))."
+                    : "Could not stop PID: \(failedPIDs.sorted().map(String.init).joined(separator: ", "))."
+            )
+        }
+
+        let stoppedCount = safeProcesses.count
+        return DiagnosticResult(
+            kind: .success,
+            message: language == .russian
+                ? "Остановлено внешних процессов: \(stoppedCount). Порт 8090 освобождён от конфликтующих копий."
+                : "Stopped \(stoppedCount) external process(es). Port 8090 is free from conflicting copies."
+        )
     }
 
     func inspectExecutable(path: String, language: AppLanguage) async -> DiagnosticResult {
@@ -184,20 +366,29 @@ final class TorrServerDiagnosticsService {
         executablePath: String,
         storage: TorrServerStorageSnapshot,
         port: DiagnosticResult,
-        process: DiagnosticResult,
+        processScan: TorrServerProcessScan,
         executable: DiagnosticResult
     ) -> String {
         let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"]
             as? String ?? "unknown"
         return [
             "TorrServer GUI diagnostics",
+            "Generated: \(ISO8601DateFormatter().string(from: Date()))",
             "macOS: \(ProcessInfo.processInfo.operatingSystemVersionString)",
             "App: \(appVersion)",
+            "App PID: \(ProcessInfo.processInfo.processIdentifier)",
             "Status: \(status)",
             "Details: \(tooltip)",
             "Executable: \(executablePath)",
             "Port: \(port.message)",
-            "Process: \(process.message)",
+            "Processes: \(processScan.result.message)",
+            "Port 8090 listeners: \(processScan.listenerPIDs.map(String.init).joined(separator: ", "))",
+            "External process details:",
+            processScan.processes.isEmpty
+                ? "- none"
+                : processScan.processes.map {
+                    "- PID \($0.pid), PPID \($0.parentPID), kind \($0.kind), port8090 \($0.listensOnPort8090), command \($0.command)"
+                }.joined(separator: "\n"),
             "Executable check: \(executable.message)",
             "Memory buffer: \(storage.cacheUsed) / \(storage.cacheCapacity) bytes",
             "Disk cache: \(storage.diskCacheSize) bytes at \(storage.diskCachePath)",
@@ -220,6 +411,45 @@ final class TorrServerDiagnosticsService {
             throw AppError(output.isEmpty ? "Diagnostic command failed." : output)
         }
         return output
+    }
+
+    private struct ProcessRow {
+        let pid: Int32
+        let parentPID: Int32
+        let command: String
+    }
+
+    private static func processRows() throws -> [ProcessRow] {
+        let output = try run(
+            "/bin/ps",
+            arguments: ["-U", NSUserName(), "-o", "pid=,ppid=,command="]
+        )
+        return output.split(separator: "\n").compactMap { line in
+            let components = line.split(
+                maxSplits: 2,
+                omittingEmptySubsequences: true,
+                whereSeparator: \.isWhitespace
+            )
+            guard components.count == 3,
+                  let pid = Int32(components[0]),
+                  let parentPID = Int32(components[1]) else { return nil }
+            return ProcessRow(
+                pid: pid,
+                parentPID: parentPID,
+                command: String(components[2])
+            )
+        }
+    }
+
+    private static func port8090ListenerPIDs() -> [Int32] {
+        let output = (try? run(
+            "/usr/sbin/lsof",
+            arguments: ["-nP", "-Fp", "-iTCP:8090", "-sTCP:LISTEN"]
+        )) ?? ""
+        return output.split(separator: "\n").compactMap { line in
+            guard line.first == "p" else { return nil }
+            return Int32(line.dropFirst())
+        }
     }
 
     private static func isSafeCacheRoot(_ path: String) -> Bool {

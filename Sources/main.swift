@@ -4,6 +4,7 @@ import CoreImage.CIFilterBuiltins
 import Darwin
 import QuartzCore
 import SwiftUI
+import UniformTypeIdentifiers
 import UserNotifications
 
 private let webUIURL = URL(string: "http://localhost:8090")!
@@ -276,6 +277,11 @@ final class TorrServerProcessController {
 
     var isRunning: Bool {
         task?.isRunning == true
+    }
+
+    var runningPID: Int32? {
+        guard let task, task.isRunning else { return nil }
+        return task.processIdentifier
     }
 
     func start(executablePath: String) throws {
@@ -1177,10 +1183,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     @objc private func showAboutPanel(_ sender: Any?) {
         let version = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"
-        ) as? String ?? "2.4.3"
+        ) as? String ?? "2.5.0"
         let build = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleVersion"
-        ) as? String ?? "26"
+        ) as? String ?? "28"
         let credits = NSAttributedString(
             string: texts.aboutCredits,
             attributes: [
@@ -1350,11 +1356,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         mainWindowModel.onFindTorrServer = { [weak self] in
             self?.findOtherTorrServerProcesses()
         }
+        mainWindowModel.onRunFullDiagnostics = { [weak self] in
+            self?.runFullDiagnostics()
+        }
+        mainWindowModel.onStopExternalProcesses = { [weak self] in
+            self?.stopExternalTorrServerProcesses()
+        }
         mainWindowModel.onCheckExecutable = { [weak self] in
             self?.checkTorrServerExecutable()
         }
         mainWindowModel.onCopyDiagnosticReport = { [weak self] in
             self?.copyDiagnosticReport()
+        }
+        mainWindowModel.onSaveDiagnosticReport = { [weak self] in
+            self?.saveDiagnosticReport()
         }
         searchModel.onTorrentAdded = { [weak self] hash in
             self?.libraryModel.refresh(selectingHash: hash)
@@ -1796,9 +1811,119 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         mainWindowModel.latestDiagnostic = mainWindowModel.processDiagnostic
         Task { [weak self] in
             guard let self else { return }
-            self.mainWindowModel.processDiagnostic = await self.diagnosticsService
-                .findTorrServerProcesses(language: self.currentLanguage)
-            self.mainWindowModel.latestDiagnostic = self.mainWindowModel.processDiagnostic
+            let scan = await self.diagnosticsService.scanTorrServerProcesses(
+                managedPID: self.processController.runningPID,
+                language: self.currentLanguage
+            )
+            self.mainWindowModel.processScan = scan
+            self.mainWindowModel.processDiagnostic = scan.result
+            self.mainWindowModel.latestDiagnostic = scan.result
+        }
+    }
+
+    private func runFullDiagnostics() {
+        guard !mainWindowModel.isRunningDiagnostics else { return }
+        Task { [weak self] in
+            await self?.performFullDiagnostics()
+        }
+    }
+
+    private func performFullDiagnostics() async {
+        guard !mainWindowModel.isRunningDiagnostics else { return }
+
+        mainWindowModel.isRunningDiagnostics = true
+        let checking = DiagnosticResult(kind: .checking, message: "")
+        mainWindowModel.portDiagnostic = checking
+        mainWindowModel.processDiagnostic = checking
+        mainWindowModel.executableDiagnostic = checking
+        mainWindowModel.latestDiagnostic = checking
+
+        let language = currentLanguage
+        let path = executablePath
+        let managedPID = processController.runningPID
+        let torrents = libraryModel.torrents
+
+        async let port = diagnosticsService.checkPort(language: language)
+        async let processScan = diagnosticsService.scanTorrServerProcesses(
+            managedPID: managedPID,
+            language: language
+        )
+        async let executable = diagnosticsService.inspectExecutable(
+            path: path,
+            language: language
+        )
+        async let storage = diagnosticsService.storageSnapshot(torrents: torrents)
+
+        let results = await (port, processScan, executable, storage)
+        mainWindowModel.portDiagnostic = results.0
+        mainWindowModel.processScan = results.1
+        mainWindowModel.processDiagnostic = results.1.result
+        mainWindowModel.executableDiagnostic = results.2
+        mainWindowModel.storage = results.3
+        mainWindowModel.latestDiagnostic = fullDiagnosticSummary(
+            port: results.0,
+            process: results.1.result,
+            executable: results.2,
+            language: language
+        )
+        mainWindowModel.isRunningDiagnostics = false
+    }
+
+    private func fullDiagnosticSummary(
+        port: DiagnosticResult,
+        process: DiagnosticResult,
+        executable: DiagnosticResult,
+        language: AppLanguage
+    ) -> DiagnosticResult {
+        let checks = [port, process, executable]
+        let failures = checks.filter { $0.kind == .failure }
+        let warnings = checks.filter { $0.kind == .warning }
+
+        if failures.isEmpty, warnings.isEmpty {
+            return DiagnosticResult(
+                kind: .success,
+                message: language == .russian
+                    ? "Проверка завершена: порт, процессы и исполняемый файл в порядке."
+                    : "Check completed: port, processes, and executable are healthy."
+            )
+        }
+
+        let details = (failures + warnings)
+            .map(\.message)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        return DiagnosticResult(
+            kind: failures.isEmpty ? .warning : .failure,
+            message: (language == .russian
+                ? "Проверка обнаружила проблему. "
+                : "The check found an issue. ") + details
+        )
+    }
+
+    private func stopExternalTorrServerProcesses() {
+        guard !mainWindowModel.isStoppingExternalProcesses else { return }
+        let requestedPIDs = Set(mainWindowModel.processScan.processes.map(\.pid))
+        mainWindowModel.isStoppingExternalProcesses = true
+        mainWindowModel.latestDiagnostic = DiagnosticResult(
+            kind: .checking,
+            message: ""
+        )
+
+        Task { [weak self] in
+            guard let self else { return }
+            let result = await self.diagnosticsService.stopExternalProcesses(
+                requestedPIDs: requestedPIDs,
+                managedPID: self.processController.runningPID,
+                language: self.currentLanguage
+            )
+            let refreshedScan = await self.diagnosticsService.scanTorrServerProcesses(
+                managedPID: self.processController.runningPID,
+                language: self.currentLanguage
+            )
+            self.mainWindowModel.processScan = refreshedScan
+            self.mainWindowModel.processDiagnostic = refreshedScan.result
+            self.mainWindowModel.latestDiagnostic = result
+            self.mainWindowModel.isStoppingExternalProcesses = false
         }
     }
 
@@ -1817,18 +1942,80 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
     }
 
-    private func copyDiagnosticReport() {
-        let report = diagnosticsService.report(
+    private func diagnosticReport() -> String {
+        diagnosticsService.report(
             status: mainWindowModel.statusText,
             tooltip: mainWindowModel.statusTooltip,
             executablePath: executablePath,
             storage: mainWindowModel.storage,
             port: mainWindowModel.portDiagnostic,
-            process: mainWindowModel.processDiagnostic,
+            processScan: mainWindowModel.processScan,
             executable: mainWindowModel.executableDiagnostic
         )
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(report, forType: .string)
+    }
+
+    private var diagnosticsHaveNotRun: Bool {
+        mainWindowModel.portDiagnostic.kind == .idle
+            || mainWindowModel.processDiagnostic.kind == .idle
+            || mainWindowModel.executableDiagnostic.kind == .idle
+    }
+
+    private func copyDiagnosticReport() {
+        Task { [weak self] in
+            guard let self else { return }
+            if self.diagnosticsHaveNotRun {
+                await self.performFullDiagnostics()
+            }
+
+            let report = self.diagnosticReport()
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            let didWrite = pasteboard.setString(report, forType: .string)
+            let didVerify = pasteboard.string(forType: .string) == report
+            self.mainWindowModel.latestDiagnostic = DiagnosticResult(
+                kind: didWrite && didVerify ? .success : .failure,
+                message: didWrite && didVerify
+                    ? (self.currentLanguage == .russian
+                        ? "Отчёт скопирован в буфер обмена."
+                        : "The report was copied to the clipboard.")
+                    : (self.currentLanguage == .russian
+                        ? "Не удалось записать отчёт в буфер обмена."
+                        : "Could not write the report to the clipboard.")
+            )
+        }
+    }
+
+    private func saveDiagnosticReport() {
+        Task { [weak self] in
+            guard let self else { return }
+            if self.diagnosticsHaveNotRun {
+                await self.performFullDiagnostics()
+            }
+
+            let panel = NSSavePanel()
+            panel.title = self.currentLanguage == .russian
+                ? "Сохранить отчёт диагностики"
+                : "Save diagnostic report"
+            panel.nameFieldStringValue = "TorrServer-Diagnostics.txt"
+            panel.allowedContentTypes = [.plainText]
+            panel.canCreateDirectories = true
+
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            do {
+                try self.diagnosticReport().write(to: url, atomically: true, encoding: .utf8)
+                self.mainWindowModel.latestDiagnostic = DiagnosticResult(
+                    kind: .success,
+                    message: self.currentLanguage == .russian
+                        ? "Отчёт сохранён: \(url.lastPathComponent)."
+                        : "Report saved: \(url.lastPathComponent)."
+                )
+            } catch {
+                self.mainWindowModel.latestDiagnostic = DiagnosticResult(
+                    kind: .failure,
+                    message: error.localizedDescription
+                )
+            }
+        }
     }
 
     private func updatePopoverMaterial(with torrents: [TorrentSummary]) {
