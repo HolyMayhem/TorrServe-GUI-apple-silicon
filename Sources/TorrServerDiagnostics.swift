@@ -36,6 +36,7 @@ enum DiagnosticProcessKind: Equatable {
 struct DiagnosticProcessInfo: Identifiable, Equatable {
     let pid: Int32
     let parentPID: Int32
+    let executableName: String
     let command: String
     let kind: DiagnosticProcessKind
     let listensOnPort8090: Bool
@@ -104,13 +105,11 @@ final class TorrServerDiagnosticsService {
                 for row in rows {
                     guard row.pid != currentPID, row.pid != managedPID else { continue }
 
-                    let lowercased = row.command.lowercased()
+                    let executableName = row.executableName.lowercased()
                     let kind: DiagnosticProcessKind?
-                    if lowercased.contains("torrservermanager") {
+                    if executableName.hasPrefix("torrservermanag") {
                         kind = .application
-                    } else if lowercased.contains("torrserver-darwin-")
-                                || lowercased.hasSuffix("/torrserver")
-                                || lowercased.hasSuffix(" torrserver") {
+                    } else if executableName.hasPrefix("torrserver") {
                         kind = .server
                     } else if listenerPIDs.contains(row.pid) {
                         kind = .portOwner
@@ -123,6 +122,7 @@ final class TorrServerDiagnosticsService {
                         DiagnosticProcessInfo(
                             pid: row.pid,
                             parentPID: row.parentPID,
+                            executableName: row.executableName,
                             command: row.command,
                             kind: kind,
                             listensOnPort8090: listenerPIDs.contains(row.pid)
@@ -387,7 +387,7 @@ final class TorrServerDiagnosticsService {
             processScan.processes.isEmpty
                 ? "- none"
                 : processScan.processes.map {
-                    "- PID \($0.pid), PPID \($0.parentPID), kind \($0.kind), port8090 \($0.listensOnPort8090), command \($0.command)"
+                    "- PID \($0.pid), PPID \($0.parentPID), executable \($0.executableName), kind \($0.kind), port8090 \($0.listensOnPort8090), command \($0.command)"
                 }.joined(separator: "\n"),
             "Executable check: \(executable.message)",
             "Memory buffer: \(storage.cacheUsed) / \(storage.cacheCapacity) bytes",
@@ -416,27 +416,29 @@ final class TorrServerDiagnosticsService {
     private struct ProcessRow {
         let pid: Int32
         let parentPID: Int32
+        let executableName: String
         let command: String
     }
 
     private static func processRows() throws -> [ProcessRow] {
         let output = try run(
             "/bin/ps",
-            arguments: ["-U", NSUserName(), "-o", "pid=,ppid=,command="]
+            arguments: ["-U", NSUserName(), "-o", "pid=,ppid=,ucomm=,command="]
         )
         return output.split(separator: "\n").compactMap { line in
             let components = line.split(
-                maxSplits: 2,
+                maxSplits: 3,
                 omittingEmptySubsequences: true,
                 whereSeparator: \.isWhitespace
             )
-            guard components.count == 3,
+            guard components.count == 4,
                   let pid = Int32(components[0]),
                   let parentPID = Int32(components[1]) else { return nil }
             return ProcessRow(
                 pid: pid,
                 parentPID: parentPID,
-                command: String(components[2])
+                executableName: String(components[2]),
+                command: String(components[3])
             )
         }
     }
