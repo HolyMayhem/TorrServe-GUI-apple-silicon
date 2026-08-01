@@ -1,5 +1,6 @@
 .DS_Store
 .build/
+.vscode
 build/
 dist/
 Package.resolved
