@@ -3,6 +3,7 @@ import CoreImage
 import CoreImage.CIFilterBuiltins
 import Darwin
 import QuartzCore
+import Security
 import SwiftUI
 import UniformTypeIdentifiers
 import UserNotifications
@@ -239,14 +240,6 @@ struct Texts {
     }
     var errorNotificationTitle: String {
         language == .russian ? "Ошибка TorrServer" : "TorrServer error"
-    }
-    var notificationPermissionDeniedTitle: String {
-        language == .russian ? "Уведомления недоступны" : "Notifications unavailable"
-    }
-    var notificationPermissionDeniedMessage: String {
-        language == .russian
-            ? "Разрешите уведомления для TorrServer в Системных настройках macOS."
-            : "Allow TorrServer notifications in macOS System Settings."
     }
     var loadingMaterials: String { language == .russian ? "Загрузка…" : "Loading…" }
     var noMaterials: String { language == .russian ? "Нет материалов" : "No materials" }
@@ -952,19 +945,41 @@ enum LocalWebUIAddress {
 }
 
 @MainActor
-final class NotificationController: NSObject, UNUserNotificationCenterDelegate {
+final class NotificationController: NSObject,
+    UNUserNotificationCenterDelegate,
+    NSUserNotificationCenterDelegate
+{
     private let center = UNUserNotificationCenter.current()
+    private let usesLegacyDelivery: Bool
     private var authorizationRequestInFlight = false
 
     override init() {
+        usesLegacyDelivery = !Self.hasStableSigningIdentity()
         super.init()
         center.delegate = self
+        if usesLegacyDelivery {
+            NSUserNotificationCenter.default.delegate = self
+        }
     }
 
-    func setEnabled(_ enabled: Bool, completion: @escaping (Bool) -> Void) {
+    func setEnabled(
+        _ enabled: Bool,
+        completion: @escaping (_ enabled: Bool, _ shouldOpenSettings: Bool) -> Void
+    ) {
         guard enabled else {
             UserDefaults.standard.set(false, forKey: notificationsEnabledKey)
-            completion(false)
+            completion(false, false)
+            return
+        }
+
+        // Ad-hoc signatures have a different designated requirement after every
+        // build. On macOS this can make UNUserNotificationCenter report the app
+        // as unavailable instead of presenting its authorization sheet. Keep the
+        // modern API for stable Apple-signed builds and use the built-in macOS
+        // compatibility center for freely distributed ad-hoc builds.
+        if usesLegacyDelivery {
+            UserDefaults.standard.set(true, forKey: notificationsEnabledKey)
+            completion(true, false)
             return
         }
 
@@ -976,28 +991,53 @@ final class NotificationController: NSObject, UNUserNotificationCenterDelegate {
             let settings = await center.notificationSettings()
             switch settings.authorizationStatus {
             case .authorized, .provisional, .ephemeral:
-                finishAuthorization(granted: true, completion: completion)
+                finishAuthorization(
+                    granted: true,
+                    shouldOpenSettings: false,
+                    completion: completion
+                )
 
             case .notDetermined:
                 do {
                     let granted = try await center.requestAuthorization(
                         options: [.alert, .sound]
                     )
-                    finishAuthorization(granted: granted, completion: completion)
+                    finishAuthorization(
+                        granted: granted,
+                        shouldOpenSettings: false,
+                        completion: completion
+                    )
                 } catch {
-                    finishAuthorization(granted: false, completion: completion)
+                    finishAuthorization(
+                        granted: false,
+                        shouldOpenSettings: false,
+                        completion: completion
+                    )
                 }
 
             case .denied:
-                finishAuthorization(granted: false, completion: completion)
+                finishAuthorization(
+                    granted: false,
+                    shouldOpenSettings: true,
+                    completion: completion
+                )
 
             @unknown default:
-                finishAuthorization(granted: false, completion: completion)
+                finishAuthorization(
+                    granted: false,
+                    shouldOpenSettings: false,
+                    completion: completion
+                )
             }
         }
     }
 
     func synchronizeEnabledState(completion: @escaping (Bool) -> Void) {
+        if usesLegacyDelivery {
+            completion(UserDefaults.standard.bool(forKey: notificationsEnabledKey))
+            return
+        }
+
         Task { [weak self] in
             guard let self else { return }
             let settings = await center.notificationSettings()
@@ -1017,6 +1057,15 @@ final class NotificationController: NSObject, UNUserNotificationCenterDelegate {
 
     func send(title: String, body: String) {
         guard UserDefaults.standard.bool(forKey: notificationsEnabledKey) else {
+            return
+        }
+
+        if usesLegacyDelivery {
+            let notification = NSUserNotification()
+            notification.title = title
+            notification.informativeText = body
+            notification.soundName = NSUserNotificationDefaultSoundName
+            NSUserNotificationCenter.default.deliver(notification)
             return
         }
 
@@ -1048,11 +1097,40 @@ final class NotificationController: NSObject, UNUserNotificationCenterDelegate {
 
     private func finishAuthorization(
         granted: Bool,
-        completion: @escaping (Bool) -> Void
+        shouldOpenSettings: Bool,
+        completion: @escaping (_ enabled: Bool, _ shouldOpenSettings: Bool) -> Void
     ) {
         authorizationRequestInFlight = false
         UserDefaults.standard.set(granted, forKey: notificationsEnabledKey)
-        completion(granted)
+        completion(granted, shouldOpenSettings)
+    }
+
+    private static func hasStableSigningIdentity() -> Bool {
+        var staticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(
+            Bundle.main.bundleURL as CFURL,
+            [],
+            &staticCode
+        ) == errSecSuccess, let staticCode else {
+            return false
+        }
+
+        var signingInformation: CFDictionary?
+        guard SecCodeCopySigningInformation(
+            staticCode,
+            SecCSFlags(rawValue: kSecCSSigningInformation),
+            &signingInformation
+        ) == errSecSuccess,
+            let dictionary = signingInformation as NSDictionary?
+        else {
+            return false
+        }
+
+        let teamIdentifierKey = kSecCodeInfoTeamIdentifier as String
+        guard let teamIdentifier = dictionary[teamIdentifierKey] as? String else {
+            return false
+        }
+        return !teamIdentifier.isEmpty
     }
 
     nonisolated func userNotificationCenter(
@@ -1061,6 +1139,13 @@ final class NotificationController: NSObject, UNUserNotificationCenterDelegate {
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         completionHandler([.banner, .sound])
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: NSUserNotificationCenter,
+        shouldPresent notification: NSUserNotification
+    ) -> Bool {
+        true
     }
 }
 
@@ -1314,18 +1399,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         mainWindowModel.notificationsEnabled = enabled
         mainWindowModel.notificationsAuthorizationPending = enabled
         isNotificationAuthorizationPending = enabled
-        notificationController.setEnabled(enabled) { [weak self] granted in
+        notificationController.setEnabled(enabled) { [weak self] granted, shouldOpenSettings in
             guard let self else { return }
             self.isNotificationAuthorizationPending = false
             self.mainWindowModel.notificationsAuthorizationPending = false
             self.mainWindowModel.notificationsEnabled = granted
 
-            if enabled && !granted {
-                self.showAlert(
-                    title: self.texts.notificationPermissionDeniedTitle,
-                    message: self.texts.notificationPermissionDeniedMessage
-                )
+            if enabled && !granted && shouldOpenSettings {
+                self.openNotificationSettings()
             }
+        }
+    }
+
+    private func openNotificationSettings() {
+        let bundleIdentifier = Bundle.main.bundleIdentifier ?? productionBundleIdentifier
+        let destinations = [
+            "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=\(bundleIdentifier)",
+            "x-apple.systempreferences:com.apple.preference.notifications"
+        ]
+
+        for destination in destinations {
+            guard let url = URL(string: destination) else { continue }
+            if NSWorkspace.shared.open(url) { return }
         }
     }
 

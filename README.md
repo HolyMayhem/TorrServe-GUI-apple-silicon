@@ -4,13 +4,18 @@
 
 A native macOS app for controlling TorrServer on Apple Silicon without Terminal.
 
+Its main advantage is that you do not need to use the standard TorrServer Web UI.
+You can manage everything directly in the app: add movies using magnet links or
+`.torrent` files, organize your library, and start watching in your preferred player.
+
 ## Features
 
 - Start, stop, update, and diagnose TorrServer.
-- Add magnet links and `.torrent` files to the native library.
+- Add movies using magnet links or `.torrent` files directly in the app.
 - Search for torrents through Jackett.
 - Play content in IINA, VLC, Infuse, or the default media player.
-- View controls, transfer speed, and active stream information in the menu bar.
+- Use a compact menu bar icon to view server status, streaming speed, and active
+  transfer statistics, or quickly start and stop TorrServer.
 - Use the interface in English or Russian.
 
 ## Installation
