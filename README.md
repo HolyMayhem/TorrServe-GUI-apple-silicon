@@ -1,29 +1,27 @@
 # TorrServer for macOS
 
-Нативное приложение для управления TorrServer на Apple Silicon без Терминала.
+**English** | [Русский](README.ru.md)
 
-## Возможности
+A native macOS app for controlling TorrServer on Apple Silicon without Terminal.
 
-- запуск, остановка, обновление и диагностика TorrServer;
-- нативная библиотека с magnet-ссылками и `.torrent`-файлами;
-- поиск раздач через Jackett;
-- воспроизведение в IINA, VLC, Infuse или системном плеере;
-- управление, скорость и активная трансляция в menu bar;
-- русский и английский интерфейс.
+## Features
 
-## Установка
+- Start, stop, update, and diagnose TorrServer.
+- Add magnet links and `.torrent` files to the native library.
+- Search for torrents through Jackett.
+- Play content in IINA, VLC, Infuse, or the default media player.
+- View controls, transfer speed, and active stream information in the menu bar.
+- Use the interface in English or Russian.
 
-Скачайте DMG из раздела Releases, откройте его и перетащите `TorrServer.app`
-в папку `Applications`.
+## Installation
 
-Исполняемый файл `TorrServer-darwin-arm64` уже входит в приложение. Jackett
-требуется только для встроенного поиска.
+Download the DMG from Releases, open it, and drag `TorrServer.app` into the
+`Applications` folder.
 
-## Системные требования
+The Apple Silicon `TorrServer-darwin-arm64` executable is bundled with the app.
+Jackett is only required for built-in search.
 
-- macOS 12 или новее;
-- Mac с Apple Silicon.
+## Requirements
 
-## Автор
-
-[Holy Mayhem](https://t.me/holymayhem)
+- macOS 12 or later.
+- A Mac with Apple Silicon.
