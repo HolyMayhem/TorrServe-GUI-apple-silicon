@@ -255,12 +255,18 @@ struct MainWindowView: View {
                     }
                     .frame(height: 29)
 
-                    GlassToggleRow(
-                        title: texts.jackettSearch,
-                        systemImage: "magnifyingglass.circle",
-                        isOn: model.jackettEnabled,
-                        onChange: { model.onJackettEnabledChanged?($0) }
-                    )
+                    HStack {
+                        Label(texts.jackettSearch, systemImage: "magnifyingglass.circle")
+                            .font(.system(size: 13, weight: .medium))
+
+                        Spacer()
+
+                        GlassJackettPicker(
+                            isEnabled: model.jackettEnabled,
+                            onChange: { model.onJackettEnabledChanged?($0) }
+                        )
+                    }
+                    .frame(height: 29)
 
                     Spacer(minLength: 0)
                 }
@@ -375,26 +381,49 @@ struct MainWindowView: View {
     }
 
     private var storageSection: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack {
-                Label(
-                    model.language == .russian ? "Хранилище" : "Storage",
-                    systemImage: "internaldrive"
-                )
-                .font(.headline)
-                Spacer()
-                Button { model.onRefreshStorage?() } label: {
-                    if model.isRefreshingStorage {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Image(systemName: "arrow.clockwise")
+        VStack(alignment: .leading, spacing: 7) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack {
+                    Label(
+                        model.language == .russian ? "Хранилище" : "Storage",
+                        systemImage: "internaldrive"
+                    )
+                    .font(.system(size: 12.5, weight: .semibold))
+
+                    Spacer()
+
+                    Button(role: .destructive) {
+                        showsClearCacheConfirmation = true
+                    } label: {
+                        Label(
+                            model.language == .russian ? "Очистить" : "Clear",
+                            systemImage: "trash"
+                        )
                     }
+                    .controlSize(.small)
+                    .disabled(model.isClearingCache || !model.canStop)
+                    .popover(isPresented: $showsClearCacheConfirmation) {
+                        clearCacheConfirmation
+                    }
+
+                    Button { model.onRefreshStorage?() } label: {
+                        if model.isRefreshingStorage {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(model.isRefreshingStorage)
                 }
-                .buttonStyle(.plain)
-                .disabled(model.isRefreshingStorage)
+
+                Text(texts.storageDescription)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
 
-            HStack(spacing: 18) {
+            HStack(spacing: 8) {
                 storageValue(
                     title: model.language == .russian ? "Буфер TorrServer" : "TorrServer buffer",
                     value: storageUsageText
@@ -410,55 +439,53 @@ struct MainWindowView: View {
                     value: ByteCountFormatter.string(fromByteCount: model.storage.freeDiskSpace, countStyle: .file),
                     warning: model.storage.isLowOnDiskSpace
                 )
-                Spacer()
-
-                Button(role: .destructive) {
-                    showsClearCacheConfirmation = true
-                } label: {
-                    Label(
-                        model.language == .russian ? "Очистить" : "Clear",
-                        systemImage: "trash"
-                    )
-                }
-                .controlSize(.small)
-                .disabled(model.isClearingCache || !model.canStop)
-                .popover(isPresented: $showsClearCacheConfirmation) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text(model.language == .russian ? "Очистить кеш?" : "Clear cache?")
-                            .font(.headline)
-                        Text(model.language == .russian
-                            ? "Активные потоки будут остановлены. Материалы останутся в библиотеке."
-                            : "Active streams will stop. Library items will remain.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        HStack {
-                            Button(model.language == .russian ? "Отмена" : "Cancel") {
-                                showsClearCacheConfirmation = false
-                            }
-                            Button(role: .destructive) {
-                                showsClearCacheConfirmation = false
-                                model.onClearCache?()
-                            } label: {
-                                Text(model.language == .russian ? "Очистить" : "Clear")
-                            }
-                            .buttonStyle(.borderedProminent)
-                        }
-                    }
-                    .padding(16)
-                    .frame(width: 300)
-                }
             }
         }
         .serverBottomPanel()
     }
 
+    private var clearCacheConfirmation: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(model.language == .russian ? "Очистить кеш?" : "Clear cache?")
+                .font(.headline)
+            Text(model.language == .russian
+                ? "Активные потоки будут остановлены. Материалы останутся в библиотеке."
+                : "Active streams will stop. Library items will remain.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                Button(model.language == .russian ? "Отмена" : "Cancel") {
+                    showsClearCacheConfirmation = false
+                }
+                Button(role: .destructive) {
+                    showsClearCacheConfirmation = false
+                    model.onClearCache?()
+                } label: {
+                    Text(model.language == .russian ? "Очистить" : "Clear")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(16)
+        .frame(width: 300)
+    }
+
     private func storageValue(title: String, value: String, warning: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.caption2).foregroundStyle(.secondary)
+            Text(title)
+                .font(.system(size: 9.5))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+
             Text(value)
-                .font(.caption.monospacedDigit().weight(.medium))
+                .font(.system(size: 9.5, weight: .medium, design: .monospaced))
                 .foregroundStyle(warning ? Color.orange : Color.primary)
+                .lineLimit(1)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
     }
 
     private var storageUsageText: String {
@@ -744,6 +771,73 @@ private struct GlassLanguagePicker: View {
         Text(title)
             .font(.system(size: 11.5, weight: language == value ? .semibold : .regular))
             .foregroundStyle(language == value ? Color.white : Color.secondary)
+            .frame(maxWidth: .infinity)
+    }
+}
+
+private struct GlassJackettPicker: View {
+    let isEnabled: Bool
+    let onChange: (Bool) -> Void
+
+    var body: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.24)) {
+                onChange(!isEnabled)
+            }
+        } label: {
+            ZStack(alignment: isEnabled ? .leading : .trailing) {
+                jackettTrack
+
+                jackettThumb
+                    .padding(3)
+
+                HStack(spacing: 0) {
+                    optionLabel("Jackett", selected: isEnabled)
+                    optionLabel("Off", selected: !isEnabled)
+                }
+            }
+            .frame(width: 230, height: 28)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Jackett")
+        .accessibilityValue(isEnabled ? "Jackett" : "Off")
+        .accessibilityHint(isEnabled ? "Off" : "Jackett")
+    }
+
+    @ViewBuilder
+    private var jackettTrack: some View {
+        if #available(macOS 26.0, *) {
+            Capsule()
+                .fill(Color.secondary.opacity(0.10))
+                .glassEffect(.regular.interactive(), in: Capsule())
+        } else {
+            Capsule()
+                .fill(Color.secondary.opacity(0.18))
+                .overlay(Capsule().stroke(.white.opacity(0.12), lineWidth: 0.5))
+        }
+    }
+
+    @ViewBuilder
+    private var jackettThumb: some View {
+        let thumb = Capsule()
+            .fill(Color.accentColor.opacity(0.72))
+            .frame(width: 112, height: 22)
+
+        if #available(macOS 26.0, *) {
+            thumb.glassEffect(
+                .regular.tint(Color.accentColor.opacity(0.45)).interactive(),
+                in: Capsule()
+            )
+        } else {
+            thumb.shadow(color: .black.opacity(0.18), radius: 2, y: 1)
+        }
+    }
+
+    private func optionLabel(_ title: String, selected: Bool) -> some View {
+        Text(title)
+            .font(.system(size: 11.5, weight: selected ? .semibold : .regular))
+            .foregroundStyle(selected ? Color.white : Color.secondary)
             .frame(maxWidth: .infinity)
     }
 }

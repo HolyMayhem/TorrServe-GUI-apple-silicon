@@ -14,6 +14,7 @@ private let hideDockIconKey = "HideDockIcon"
 private let languageKey = "AppLanguage"
 private let notificationsEnabledKey = "NotificationsEnabled"
 private let speedDisplayUnitKey = "SpeedDisplayUnit"
+private let jackettSearchEnabledKey = "JackettSearchEnabled"
 private let iinaDownloadURL = URL(string: "https://iina.io/download/")!
 private let vlcDownloadURL = URL(
     string: "https://www.videolan.org/vlc/download-macosx.html"
@@ -85,6 +86,9 @@ struct Texts {
     var notifications: String {
         language == .russian ? "Системные уведомления" : "System notifications"
     }
+    var jackettSearch: String {
+        language == .russian ? "Поиск" : "Search"
+    }
     var speedFormat: String {
         language == .russian ? "Формат скорости" : "Speed format"
     }
@@ -103,6 +107,11 @@ struct Texts {
         language == .russian
             ? "Приложение автоматически проверяет IINA, VLC и Infuse. Нажмите установленный плеер, чтобы выбрать его."
             : "The app automatically checks IINA, VLC, and Infuse. Select any installed player to make it the default."
+    }
+    var storageDescription: String {
+        language == .russian
+            ? "Буфер TorrServer, дисковый кеш и доступное место."
+            : "TorrServer buffer, disk cache, and available storage."
     }
     var languageLabel: String { language == .russian ? "Язык" : "Language" }
     var russian: String { "Russian" }
@@ -918,6 +927,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         case stopped
         case running
         case streaming
+        case working
         case buffering
         case failed
         case updating
@@ -1152,13 +1162,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         refreshSpeedDisplay()
     }
 
+    private func setJackettEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: jackettSearchEnabledKey)
+
+        withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
+            mainWindowModel.jackettEnabled = enabled
+            if !enabled, mainWindowModel.selectedSection == .search {
+                mainWindowModel.selectedSection = .server
+                resizeWindow(for: .server)
+            }
+        }
+    }
+
     @objc private func showAboutPanel(_ sender: Any?) {
         let version = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"
-        ) as? String ?? "2.4.1"
+        ) as? String ?? "2.4.3"
         let build = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleVersion"
-        ) as? String ?? "24"
+        ) as? String ?? "26"
         let credits = NSAttributedString(
             string: texts.aboutCredits,
             attributes: [
@@ -1218,6 +1240,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             showSpeedInMenuBarKey: true,
             hideDockIconKey: false,
             notificationsEnabledKey: false,
+            jackettSearchEnabledKey: true,
             speedDisplayUnitKey: SpeedDisplayUnit.automatic.rawValue
         ])
     }
@@ -1257,6 +1280,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         mainWindowModel.path = UserDefaults.standard.string(forKey: savedPathKey) ?? ""
         mainWindowModel.language = currentLanguage
+        mainWindowModel.jackettEnabled = UserDefaults.standard.bool(
+            forKey: jackettSearchEnabledKey
+        )
         mainWindowModel.onPathChanged = { [weak self] _ in
             guard let self else { return }
             self.saveCurrentPath()
@@ -1281,6 +1307,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
         mainWindowModel.onNotificationsChanged = { [weak self] enabled in
             self?.setNotificationsEnabled(enabled)
+        }
+        mainWindowModel.onJackettEnabledChanged = { [weak self] enabled in
+            self?.setJackettEnabled(enabled)
         }
         mainWindowModel.onSpeedUnitChanged = { [weak self] unit in
             self?.setSpeedDisplayUnit(unit)
@@ -2011,6 +2040,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         mainWindowModel.notificationsEnabled = UserDefaults.standard.bool(
             forKey: notificationsEnabledKey
         )
+        mainWindowModel.jackettEnabled = UserDefaults.standard.bool(
+            forKey: jackettSearchEnabledKey
+        )
         mainWindowModel.speedUnit = currentSpeedDisplayUnit
 
         popoverModel.statusKind = mainStatusKind(for: dotColor)
@@ -2041,6 +2073,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var menuBarVisualState: MenuBarVisualState {
         if isDownloading { return .updating }
         if mainWindowModel.statusKind == .failed { return .failed }
+        if mainWindowModel.statusKind == .working { return .working }
         guard processController.isRunning else { return .stopped }
         if currentTorrents.contains(where: { $0.status == 2 }) { return .buffering }
         if currentTorrents.contains(where: { $0.status == 3 })
@@ -2060,15 +2093,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         let color: NSColor
         switch state {
-        case .stopped: color = .systemGray
-        case .running, .streaming: color = .systemGreen
-        case .buffering, .updating: color = .systemOrange
-        case .failed: color = .systemRed
+        case .stopped:
+            color = NSColor(
+                srgbRed: 82.0 / 255.0,
+                green: 119.0 / 255.0,
+                blue: 100.0 / 255.0,
+                alpha: 1
+            )
+        case .running, .streaming:
+            color = NSColor(
+                srgbRed: 0.0 / 255.0,
+                green: 239.0 / 255.0,
+                blue: 98.0 / 255.0,
+                alpha: 1
+            )
+        case .working, .buffering, .updating:
+            color = NSColor(
+                srgbRed: 220.0 / 255.0,
+                green: 166.0 / 255.0,
+                blue: 78.0 / 255.0,
+                alpha: 1
+            )
+        case .failed:
+            color = NSColor(
+                srgbRed: 138.0 / 255.0,
+                green: 81.0 / 255.0,
+                blue: 88.0 / 255.0,
+                alpha: 1
+            )
         }
 
-        let pulse = state == .streaming ? (0.22 + phase * 0.13) : 0.18
-        let glowRect = NSRect(x: 1.25, y: 1.25, width: 15.5, height: 15.5)
-        color.withAlphaComponent(pulse).setFill()
+        let isPulsing = state == .streaming || state == .working
+        let pulse = isPulsing ? phase * 0.10 : 0
+
+        let outerGlowRect = NSRect(x: 0.35, y: 0.35, width: 17.3, height: 17.3)
+        color.withAlphaComponent(0.13 + pulse * 0.45).setFill()
+        NSBezierPath(ovalIn: outerGlowRect).fill()
+
+        let glowRect = NSRect(x: 1.1, y: 1.1, width: 15.8, height: 15.8)
+        color.withAlphaComponent(0.25 + pulse).setFill()
         NSBezierPath(ovalIn: glowRect).fill()
 
         let rect = NSRect(x: 2.45, y: 2.45, width: 13.1, height: 13.1)
@@ -2150,7 +2213,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private func updateMenuBarAnimationTimer() {
         let state = menuBarVisualState
-        let needsAnimation = state == .streaming || state == .updating
+        let needsAnimation = state == .streaming || state == .working || state == .updating
         guard needsAnimation else {
             menuBarAnimationTimer?.invalidate()
             menuBarAnimationTimer = nil

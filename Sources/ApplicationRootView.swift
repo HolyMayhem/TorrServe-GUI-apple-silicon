@@ -20,7 +20,6 @@ struct ApplicationRootView: View {
                     .zIndex(100)
                 sectionContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
                     .zIndex(0)
             }
             .padding(.horizontal, 17)
@@ -42,41 +41,35 @@ struct ApplicationRootView: View {
 
     @ViewBuilder
     private var sectionContent: some View {
-        ZStack {
-            switch mainModel.selectedSection {
-            case .server:
-                MainWindowView(model: mainModel)
-                    .transition(.opacity)
-            case .library:
-                LibraryView(
-                    mainModel: mainModel,
-                    model: libraryModel
-                )
-                .transition(.opacity)
-            case .search:
-                SearchView(
-                    mainModel: mainModel,
-                    model: searchModel
-                )
-                .transition(.opacity)
-            }
+        switch mainModel.selectedSection {
+        case .server:
+            MainWindowView(model: mainModel)
+        case .library:
+            LibraryView(
+                mainModel: mainModel,
+                model: libraryModel
+            )
+        case .search:
+            SearchView(
+                mainModel: mainModel,
+                model: searchModel
+            )
         }
-        .animation(
-            .easeOut(duration: 0.16),
-            value: mainModel.selectedSection
-        )
     }
 
     private var applicationBackground: some View {
         ZStack {
             Rectangle()
-                .fill(.ultraThinMaterial)
+                .fill(.regularMaterial)
+
+            Color(nsColor: .windowBackgroundColor)
+                .opacity(0.46)
 
             LinearGradient(
                 colors: [
-                    Color(nsColor: .windowBackgroundColor).opacity(0.34),
-                    Color.green.opacity(0.045),
-                    Color(nsColor: .windowBackgroundColor).opacity(0.22)
+                    Color.white.opacity(0.055),
+                    Color.green.opacity(0.022),
+                    Color(nsColor: .windowBackgroundColor).opacity(0.14)
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
@@ -84,7 +77,7 @@ struct ApplicationRootView: View {
 
             RadialGradient(
                 colors: [
-                    Color.white.opacity(0.045),
+                    Color.white.opacity(0.035),
                     Color.clear
                 ],
                 center: .topLeading,
@@ -212,7 +205,7 @@ private struct ApplicationHeader: View {
             }
             .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 13)
-            .padding(.vertical, 8)
+            .frame(height: 32)
             .applicationHeaderGlass(in: Capsule())
             .layoutPriority(1)
             .contentShape(Capsule())
