@@ -6,13 +6,34 @@ struct LibraryView: View {
     @ObservedObject var mainModel: MainWindowModel
     @ObservedObject var model: LibraryViewModel
     @State private var showsMagnetSheet = false
+    @FocusState private var magnetFieldIsFocused: Bool
 
     private var texts: LibraryTexts {
         LibraryTexts(language: mainModel.language)
     }
 
     var body: some View {
-        libraryContent
+        ZStack {
+            libraryContent
+
+            if let torrent = model.pendingDeletionTorrent {
+                Color.black.opacity(0.18)
+                    .ignoresSafeArea()
+                    .onTapGesture { model.cancelRemoval() }
+
+                DeleteConfirmationPopover(
+                    title: torrent.displayTitle,
+                    texts: texts,
+                    isRemoving: model.isRemoving,
+                    cancel: { model.cancelRemoval() },
+                    confirm: { model.confirmRemoval() }
+                )
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                .shadow(color: .black.opacity(0.28), radius: 18, y: 8)
+                .transition(.scale(scale: 0.94).combined(with: .opacity))
+            }
+        }
+        .animation(.easeOut(duration: 0.16), value: model.pendingDeletionTorrentID)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $showsMagnetSheet) {
             magnetSheet
@@ -38,12 +59,18 @@ struct LibraryView: View {
     }
 
     private var libraryContent: some View {
-        HStack(spacing: 12) {
-            torrentListPanel
-                .frame(width: 314)
+        Group {
+            if model.displayMode == .compact {
+                HStack(spacing: 12) {
+                    torrentListPanel
+                        .frame(width: 314)
 
-            torrentDetailPanel
-                .frame(maxWidth: .infinity)
+                    torrentDetailPanel
+                        .frame(maxWidth: .infinity)
+                }
+            } else {
+                visualLibrary
+            }
         }
         .frame(maxHeight: .infinity)
     }
@@ -55,6 +82,8 @@ struct LibraryView: View {
                     .font(.headline)
 
                 Spacer()
+
+                LibraryModePicker(model: model, language: mainModel.language)
 
                 Button {
                     model.refresh()
@@ -104,6 +133,13 @@ struct LibraryView: View {
                             ) {
                                 model.select(torrent)
                             }
+                            .contextMenu {
+                                TorrentContextMenu(
+                                    torrent: torrent,
+                                    model: model,
+                                    language: mainModel.language
+                                )
+                            }
                         }
                     }
                     .padding(.vertical, 2)
@@ -135,6 +171,115 @@ struct LibraryView: View {
                         lineWidth: 2,
                         dash: [6, 4]
                     ))
+            }
+        }
+    }
+
+    private var visualLibrary: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                Label(texts.library, systemImage: "film.stack")
+                    .font(.headline)
+
+                TextField(texts.search, text: $model.searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 260)
+
+                Spacer()
+
+                LibraryModePicker(model: model, language: mainModel.language)
+
+                Button { model.refresh() } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.plain)
+                .disabled(model.isRefreshing || !mainModel.canStop)
+
+                Menu {
+                    Button {
+                        showsMagnetSheet = true
+                    } label: {
+                        Label(texts.addMagnet, systemImage: "link")
+                    }
+                    Button {
+                        model.chooseTorrentFiles(language: mainModel.language)
+                    } label: {
+                        Label(texts.addTorrentFile, systemImage: "doc.badge.plus")
+                    }
+                } label: {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 17))
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .disabled(model.isAdding || !mainModel.canStop)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .libraryPanel()
+
+            if !mainModel.canStop {
+                serverUnavailable
+                    .libraryPanel()
+            } else if model.filteredTorrents.isEmpty {
+                emptyLibrary
+                    .libraryPanel()
+            } else {
+                ScrollView {
+                    if model.displayMode == .posters {
+                        LazyVGrid(
+                            columns: [GridItem(.adaptive(minimum: 150, maximum: 190), spacing: 14)],
+                            spacing: 16
+                        ) {
+                            ForEach(model.filteredTorrents) { torrent in
+                                TorrentPosterCard(
+                                    torrent: torrent,
+                                    metadata: model.metadata(for: torrent),
+                                    language: mainModel.language,
+                                    play: {
+                                        model.playFirstFile(
+                                            in: torrent,
+                                            language: mainModel.language
+                                        )
+                                    }
+                                )
+                                .contextMenu {
+                                    TorrentContextMenu(
+                                        torrent: torrent,
+                                        model: model,
+                                        language: mainModel.language
+                                    )
+                                }
+                            }
+                        }
+                        .padding(14)
+                    } else {
+                        LazyVStack(spacing: 12) {
+                            ForEach(model.filteredTorrents) { torrent in
+                                TorrentLargeCard(
+                                    torrent: torrent,
+                                    metadata: model.metadata(for: torrent),
+                                    language: mainModel.language,
+                                    play: {
+                                        model.playFirstFile(
+                                            in: torrent,
+                                            language: mainModel.language
+                                        )
+                                    }
+                                )
+                                .contextMenu {
+                                    TorrentContextMenu(
+                                        torrent: torrent,
+                                        model: model,
+                                        language: mainModel.language
+                                    )
+                                }
+                            }
+                        }
+                        .padding(14)
+                    }
+                }
+                .libraryPanel()
             }
         }
     }
@@ -175,6 +320,7 @@ struct LibraryView: View {
 
             TextField("magnet:?xt=urn:btih:…", text: $model.magnetInput)
                 .textFieldStyle(.roundedBorder)
+                .focused($magnetFieldIsFocused)
 
             HStack {
                 Text(texts.magnetHint)
@@ -199,6 +345,11 @@ struct LibraryView: View {
         }
         .padding(22)
         .frame(width: 520)
+        .onAppear {
+            DispatchQueue.main.async {
+                magnetFieldIsFocused = true
+            }
+        }
     }
 
     private var serverUnavailable: some View {
@@ -261,6 +412,263 @@ struct LibraryView: View {
             }
         }
         return accepted
+    }
+}
+
+private struct LibraryModePicker: View {
+    @ObservedObject var model: LibraryViewModel
+    let language: AppLanguage
+
+    var body: some View {
+        HStack(spacing: 1) {
+            ForEach(LibraryDisplayMode.allCases) { mode in
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        model.setDisplayMode(mode)
+                    }
+                } label: {
+                    Image(systemName: mode.systemImage)
+                        .frame(width: 25, height: 23)
+                        .background(
+                            model.displayMode == mode
+                                ? Color.accentColor.opacity(0.72)
+                                : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 7)
+                        )
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(model.displayMode == mode ? Color.white : .secondary)
+                .help(mode.title(language: language))
+            }
+        }
+        .padding(2)
+        .background(Color.secondary.opacity(0.10), in: RoundedRectangle(cornerRadius: 9))
+    }
+}
+
+private struct TorrentContextMenu: View {
+    let torrent: NativeTorrent
+    @ObservedObject var model: LibraryViewModel
+    let language: AppLanguage
+
+    private var texts: LibraryTexts { LibraryTexts(language: language) }
+
+    var body: some View {
+        Button {
+            model.playFirstFile(in: torrent, language: language)
+        } label: {
+            Label(texts.play, systemImage: "play.fill")
+        }
+        .disabled(torrent.playableFiles.isEmpty)
+
+        Menu {
+            ForEach(ExternalPlayerChoice.allCases) { choice in
+                Button(choice.title(language: language)) {
+                    model.playFirstFile(in: torrent, using: choice, language: language)
+                }
+            }
+        } label: {
+            Label(texts.openInAnotherPlayer, systemImage: "play.rectangle")
+        }
+        .disabled(torrent.playableFiles.isEmpty)
+
+        Button {
+            model.copyStreamURL(for: torrent)
+        } label: {
+            Label(texts.copyStreamURL, systemImage: "link")
+        }
+        .disabled(torrent.playableFiles.isEmpty)
+
+        Button {
+            model.openSource(for: torrent)
+        } label: {
+            Label(texts.openSource, systemImage: "safari")
+        }
+        .disabled(model.metadata(for: torrent)?.sourceURL == nil)
+
+        Divider()
+
+        Button {
+            model.showFiles(for: torrent)
+        } label: {
+            Label(texts.showFiles, systemImage: "list.bullet.rectangle")
+        }
+
+        Button {
+            model.refreshMetadata(for: torrent)
+        } label: {
+            Label(texts.refreshMetadata, systemImage: "arrow.clockwise")
+        }
+
+        Divider()
+
+        Button(role: .destructive) {
+            model.requestRemoval(of: torrent)
+        } label: {
+            Label(texts.remove, systemImage: "trash")
+        }
+    }
+}
+
+private struct TorrentPosterCard: View {
+    let torrent: NativeTorrent
+    let metadata: LibraryMetadata?
+    let language: AppLanguage
+    let play: () -> Void
+
+    private var texts: LibraryTexts { LibraryTexts(language: language) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ZStack(alignment: .bottom) {
+                LibraryPoster(torrent: torrent, metadata: metadata)
+                    .aspectRatio(2.0 / 3.0, contentMode: .fit)
+
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.78)],
+                    startPoint: .center,
+                    endPoint: .bottom
+                )
+
+                VStack(spacing: 7) {
+                    HStack {
+                        Text(texts.status(for: torrent))
+                            .font(.caption2.weight(.semibold))
+                        Spacer()
+                        if let resolution = torrent.resolutionLabel {
+                            Text(resolution).font(.caption2.weight(.bold))
+                        }
+                    }
+                    .foregroundStyle(.white)
+
+                    if torrent.stat == 2, let progress = torrent.bufferingProgress {
+                        ProgressView(value: progress)
+                            .tint(.orange)
+                    }
+
+                    Button(action: play) {
+                        Label(texts.watch, systemImage: "play.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(.green)
+                    .disabled(torrent.playableFiles.isEmpty)
+                }
+                .padding(10)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+            Text(torrent.displayTitle)
+                .font(.system(size: 12.5, weight: .semibold))
+                .lineLimit(2)
+
+            Text(LibraryFormat.fileSize(torrent.torrentSize))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(9)
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 16))
+    }
+}
+
+private struct TorrentLargeCard: View {
+    let torrent: NativeTorrent
+    let metadata: LibraryMetadata?
+    let language: AppLanguage
+    let play: () -> Void
+
+    private var texts: LibraryTexts { LibraryTexts(language: language) }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 16) {
+            LibraryPoster(torrent: torrent, metadata: metadata)
+                .frame(width: 112, height: 164)
+                .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 9) {
+                HStack(alignment: .top) {
+                    Text(torrent.displayTitle)
+                        .font(.title3.weight(.semibold))
+                        .lineLimit(2)
+                    Spacer()
+                    if let resolution = torrent.resolutionLabel {
+                        Text(resolution)
+                            .font(.caption.weight(.bold))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.regularMaterial, in: Capsule())
+                    }
+                }
+
+                if let summary = metadata?.summary, !summary.isEmpty {
+                    Text(summary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(4)
+                }
+
+                HStack(spacing: 8) {
+                    Label("\(texts.seeds) \(torrent.connectedSeeders)", systemImage: "arrow.up.circle")
+                    Label("\(texts.peers) \(max(torrent.activePeers, torrent.totalPeers))", systemImage: "person.2")
+                    Label(LibraryFormat.speed(torrent.downloadSpeed), systemImage: "arrow.down.circle")
+                }
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+
+                if torrent.stat == 2, let progress = torrent.bufferingProgress {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(texts.buffering)
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                        ProgressView(value: progress).tint(.orange)
+                    }
+                }
+
+                Spacer()
+
+                HStack {
+                    Text(LibraryFormat.fileSize(torrent.torrentSize))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(action: play) {
+                        Label(texts.watch, systemImage: "play.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(.green)
+                    .disabled(torrent.playableFiles.isEmpty)
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, minHeight: 190, alignment: .leading)
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 18))
+    }
+}
+
+private struct LibraryPoster: View {
+    let torrent: NativeTorrent
+    let metadata: LibraryMetadata?
+
+    var body: some View {
+        let value = torrent.poster.isEmpty ? (metadata?.posterURL ?? "") : torrent.poster
+        ZStack {
+            Color.secondary.opacity(0.12)
+            if let url = URL(string: value), !value.isEmpty {
+                AsyncImage(url: url) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    ProgressView().controlSize(.small)
+                }
+            } else {
+                Image(systemName: "film")
+                    .font(.system(size: 34, weight: .light))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .clipped()
     }
 }
 
@@ -676,6 +1084,23 @@ private struct LibraryTexts {
     var seeds: String { language == .russian ? "Сиды" : "Seeds" }
     var peers: String { language == .russian ? "Пиры" : "Peers" }
     var watch: String { language == .russian ? "Смотреть" : "Watch" }
+    var play: String { language == .russian ? "Воспроизвести" : "Play" }
+    var buffering: String { language == .russian ? "Буферизация" : "Buffering" }
+    var openInAnotherPlayer: String {
+        language == .russian ? "Открыть в другом плеере" : "Open in another player"
+    }
+    var copyStreamURL: String {
+        language == .russian ? "Скопировать stream URL" : "Copy stream URL"
+    }
+    var openSource: String {
+        language == .russian ? "Открыть источник" : "Open source"
+    }
+    var showFiles: String {
+        language == .russian ? "Показать файлы" : "Show files"
+    }
+    var refreshMetadata: String {
+        language == .russian ? "Обновить метаданные" : "Refresh metadata"
+    }
 
     func itemCount(_ count: Int) -> String {
         language == .russian ? "Материалов: \(count)" : "Items: \(count)"

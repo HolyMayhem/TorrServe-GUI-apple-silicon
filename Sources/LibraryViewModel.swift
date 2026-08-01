@@ -4,11 +4,41 @@ import UniformTypeIdentifiers
 
 private let libraryPlayerKey = "LibraryPreferredPlayer"
 private let libraryCustomPlayerPathKey = "LibraryCustomPlayerPath"
+private let libraryPlayerSetupCompletedKey = "LibraryPlayerSetupCompleted"
+private let libraryDisplayModeKey = "LibraryDisplayMode"
+
+enum LibraryDisplayMode: String, CaseIterable, Identifiable {
+    case compact
+    case posters
+    case cards
+
+    var id: String { rawValue }
+
+    func title(language: AppLanguage) -> String {
+        switch self {
+        case .compact:
+            return language == .russian ? "Список" : "List"
+        case .posters:
+            return language == .russian ? "Постеры" : "Posters"
+        case .cards:
+            return language == .russian ? "Карточки" : "Cards"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .compact: return "sidebar.left"
+        case .posters: return "square.grid.2x2"
+        case .cards: return "rectangle.grid.1x2"
+        }
+    }
+}
 
 enum ExternalPlayerChoice: String, CaseIterable, Identifiable {
     case quickTime
     case iina
     case vlc
+    case infuse
     case systemDefault
     case custom
 
@@ -22,11 +52,66 @@ enum ExternalPlayerChoice: String, CaseIterable, Identifiable {
             return "IINA"
         case .vlc:
             return "VLC"
+        case .infuse:
+            return "Infuse"
         case .systemDefault:
             return language == .russian ? "По умолчанию macOS" : "macOS Default"
         case .custom:
             return language == .russian ? "Другое приложение…" : "Other app…"
         }
+    }
+
+    var bundleIdentifier: String? {
+        switch self {
+        case .quickTime: return "com.apple.QuickTimePlayerX"
+        case .iina: return "com.colliderli.iina"
+        case .vlc: return "org.videolan.vlc"
+        case .infuse: return "com.firecore.infuse"
+        case .systemDefault, .custom: return nil
+        }
+    }
+
+    var downloadURL: URL? {
+        switch self {
+        case .iina:
+            return URL(string: "https://iina.io/download/")
+        case .vlc:
+            return URL(string: "https://www.videolan.org/vlc/download-macosx.html")
+        case .infuse:
+            return URL(string: "https://apps.apple.com/app/infuse/id1136220934")
+        default:
+            return nil
+        }
+    }
+}
+
+struct DetectedPlayer: Identifiable, Equatable {
+    let choice: ExternalPlayerChoice
+    let applicationURL: URL?
+
+    var id: String { choice.id }
+    var isInstalled: Bool { applicationURL != nil }
+}
+
+enum PlayerDetector {
+    static let featuredChoices: [ExternalPlayerChoice] = [.iina, .vlc, .infuse]
+
+    static func detectFeaturedPlayers() -> [DetectedPlayer] {
+        featuredChoices.map { choice in
+            DetectedPlayer(
+                choice: choice,
+                applicationURL: choice.bundleIdentifier.flatMap {
+                    NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0)
+                }
+            )
+        }
+    }
+
+    static func applicationURL(for choice: ExternalPlayerChoice) -> URL? {
+        guard let bundleIdentifier = choice.bundleIdentifier else { return nil }
+        return NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: bundleIdentifier
+        )
     }
 }
 
@@ -49,7 +134,13 @@ final class LibraryViewModel: ObservableObject {
     @Published var alert: LibraryAlert?
     @Published var playerChoice: ExternalPlayerChoice
     @Published var customPlayerPath: String
+    @Published var displayMode: LibraryDisplayMode
+    @Published var showsPlayerSetup: Bool
+    @Published var detectedPlayers: [DetectedPlayer] = []
+    @Published var pendingDeletionTorrentID: String?
     @Published private(set) var metadataByHash: [String: LibraryMetadata] = [:]
+
+    var onPlayerChanged: ((ExternalPlayerChoice) -> Void)?
 
     private let api: NativeTorrServerAPI
     private let metadataStore: LibraryMetadataStore
@@ -67,7 +158,14 @@ final class LibraryViewModel: ObservableObject {
         customPlayerPath = UserDefaults.standard.string(
             forKey: libraryCustomPlayerPathKey
         ) ?? ""
+        displayMode = LibraryDisplayMode(
+            rawValue: UserDefaults.standard.string(forKey: libraryDisplayModeKey) ?? ""
+        ) ?? .compact
+        showsPlayerSetup = !UserDefaults.standard.bool(
+            forKey: libraryPlayerSetupCompletedKey
+        )
         metadataByHash = metadataStore.allMetadata()
+        refreshDetectedPlayers()
     }
 
     var filteredTorrents: [NativeTorrent] {
@@ -82,6 +180,11 @@ final class LibraryViewModel: ObservableObject {
     var selectedTorrent: NativeTorrent? {
         guard let selectedTorrentID else { return nil }
         return torrents.first { $0.id == selectedTorrentID }
+    }
+
+    var pendingDeletionTorrent: NativeTorrent? {
+        guard let pendingDeletionTorrentID else { return nil }
+        return torrents.first { $0.id == pendingDeletionTorrentID }
     }
 
     func startPolling() {
@@ -130,6 +233,15 @@ final class LibraryViewModel: ObservableObject {
 
     func select(_ torrent: NativeTorrent) {
         selectedTorrentID = torrent.id
+    }
+
+    func setDisplayMode(_ mode: LibraryDisplayMode) {
+        displayMode = mode
+        UserDefaults.standard.set(mode.rawValue, forKey: libraryDisplayModeKey)
+    }
+
+    func refreshDetectedPlayers() {
+        detectedPlayers = PlayerDetector.detectFeaturedPlayers()
     }
 
     func metadata(for torrent: NativeTorrent) -> LibraryMetadata? {
@@ -206,14 +318,21 @@ final class LibraryViewModel: ObservableObject {
     }
 
     func removeSelected() {
-        guard let torrent = selectedTorrent, !isRemoving else { return }
+        guard let torrent = selectedTorrent else { return }
+        remove(torrent)
+    }
+
+    func remove(_ torrent: NativeTorrent) {
+        guard !isRemoving else { return }
         isRemoving = true
 
         Task {
             defer { isRemoving = false }
             do {
                 try await api.removeTorrent(hash: torrent.hash)
-                selectedTorrentID = nil
+                if selectedTorrentID == torrent.id {
+                    selectedTorrentID = nil
+                }
                 try await refreshImmediately(selectingHash: nil)
             } catch {
                 showError(error)
@@ -221,16 +340,44 @@ final class LibraryViewModel: ObservableObject {
         }
     }
 
+    func requestRemoval(of torrent: NativeTorrent) {
+        pendingDeletionTorrentID = torrent.id
+    }
+
+    func cancelRemoval() {
+        pendingDeletionTorrentID = nil
+    }
+
+    func confirmRemoval() {
+        guard let torrent = pendingDeletionTorrent else { return }
+        pendingDeletionTorrentID = nil
+        remove(torrent)
+    }
+
     func play(
         file: NativeTorrentFile,
         language: AppLanguage
     ) {
-        guard
-            let torrent = selectedTorrent,
-            let streamURL = api.streamURL(torrent: torrent, file: file)
-        else {
-            return
-        }
+        guard let torrent = selectedTorrent else { return }
+        play(torrent: torrent, file: file, using: playerChoice, language: language)
+    }
+
+    func playFirstFile(
+        in torrent: NativeTorrent,
+        using choice: ExternalPlayerChoice? = nil,
+        language: AppLanguage
+    ) {
+        guard let file = torrent.playableFiles.first else { return }
+        play(torrent: torrent, file: file, using: choice ?? playerChoice, language: language)
+    }
+
+    func play(
+        torrent: NativeTorrent,
+        file: NativeTorrentFile,
+        using choice: ExternalPlayerChoice,
+        language: AppLanguage
+    ) {
+        guard let streamURL = api.streamURL(torrent: torrent, file: file) else { return }
 
         Task {
             await api.beginPreloading(
@@ -242,7 +389,7 @@ final class LibraryViewModel: ObservableObject {
         do {
             try ExternalPlayerLauncher.open(
                 streamURL,
-                using: playerChoice,
+                using: choice,
                 customPlayerPath: customPlayerPath
             )
         } catch {
@@ -266,6 +413,52 @@ final class LibraryViewModel: ObservableObject {
 
         playerChoice = choice
         UserDefaults.standard.set(choice.rawValue, forKey: libraryPlayerKey)
+        UserDefaults.standard.set(true, forKey: libraryPlayerSetupCompletedKey)
+        showsPlayerSetup = false
+        refreshDetectedPlayers()
+        onPlayerChanged?(choice)
+    }
+
+    func dismissPlayerSetup() {
+        UserDefaults.standard.set(true, forKey: libraryPlayerSetupCompletedKey)
+        showsPlayerSetup = false
+    }
+
+    func download(_ choice: ExternalPlayerChoice) {
+        guard let url = choice.downloadURL else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    func copyStreamURL(for torrent: NativeTorrent) {
+        guard
+            let file = torrent.playableFiles.first,
+            let url = api.streamURL(torrent: torrent, file: file)
+        else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url.absoluteString, forType: .string)
+    }
+
+    func openSource(for torrent: NativeTorrent) {
+        guard
+            let value = metadata(for: torrent)?.sourceURL,
+            let url = URL(string: value)
+        else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    func showFiles(for torrent: NativeTorrent) {
+        select(torrent)
+        setDisplayMode(.compact)
+    }
+
+    func refreshMetadata(for torrent: NativeTorrent) {
+        metadataByHash = metadataStore.allMetadata()
+        Task {
+            if let refreshed = try? await api.torrent(hash: torrent.hash),
+               let index = torrents.firstIndex(where: { $0.id == torrent.id }) {
+                torrents[index] = refreshed
+            }
+        }
     }
 
     func chooseCustomPlayer(language: AppLanguage) {
@@ -287,6 +480,9 @@ final class LibraryViewModel: ObservableObject {
             forKey: libraryPlayerKey
         )
         UserDefaults.standard.set(url.path, forKey: libraryCustomPlayerPathKey)
+        UserDefaults.standard.set(true, forKey: libraryPlayerSetupCompletedKey)
+        showsPlayerSetup = false
+        onPlayerChanged?(.custom)
     }
 
     private func refreshImmediately(selectingHash: String?) async throws {
@@ -335,6 +531,10 @@ enum ExternalPlayerLauncher {
         case .vlc:
             applicationURL = NSWorkspace.shared.urlForApplication(
                 withBundleIdentifier: "org.videolan.vlc"
+            )
+        case .infuse:
+            applicationURL = NSWorkspace.shared.urlForApplication(
+                withBundleIdentifier: "com.firecore.infuse"
             )
         case .custom:
             applicationURL = customPlayerPath.isEmpty

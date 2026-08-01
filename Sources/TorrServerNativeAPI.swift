@@ -97,6 +97,23 @@ struct NativeTorrent: Codable, Hashable, Identifiable {
         return min(max(Double(loadedSize) / Double(torrentSize), 0), 1)
     }
 
+    var bufferingProgress: Double? {
+        guard preloadSize > 0 else { return nil }
+        return min(max(Double(preloadedBytes) / Double(preloadSize), 0), 1)
+    }
+
+    var resolutionLabel: String? {
+        let source = ([displayTitle] + allFiles.map(\.displayName))
+            .joined(separator: " ")
+            .lowercased()
+        if source.contains("2160p") || source.contains("4k") { return "4K" }
+        if source.contains("1440p") { return "1440p" }
+        if source.contains("1080p") { return "1080p" }
+        if source.contains("720p") { return "720p" }
+        if source.contains("480p") { return "480p" }
+        return nil
+    }
+
     private var filesFromStoredData: [NativeTorrentFile] {
         guard
             let data,
@@ -220,6 +237,33 @@ final class NativeTorrServerAPI {
         ])
     }
 
+    func dropTorrentCache(hash: String) async throws {
+        _ = try await postTorrents([
+            "action": "drop",
+            "hash": hash
+        ])
+    }
+
+    func cacheState(hash: String) async throws -> TorrServerCacheState {
+        let data = try await post(
+            path: "cache",
+            body: ["action": "get", "hash": hash],
+            timeout: 8
+        )
+        return try decoder.decode(TorrServerCacheState.self, from: data)
+    }
+
+    func settings() async throws -> TorrServerStorageSettings {
+        let data = try await post(path: "settings", body: ["action": "get"])
+        return try TorrServerStorageSettings(data: data)
+    }
+
+    func checkHealth() async throws {
+        var request = URLRequest(url: baseURL.appendingPathComponent("echo"))
+        request.timeoutInterval = 3
+        _ = try await perform(request)
+    }
+
     func uploadTorrent(at fileURL: URL) async throws -> [NativeTorrent] {
         try await uploadTorrent(
             data: Data(contentsOf: fileURL),
@@ -321,9 +365,17 @@ final class NativeTorrServerAPI {
     }
 
     private func postTorrents(_ body: [String: Any]) async throws -> Data {
-        var request = URLRequest(url: baseURL.appendingPathComponent("torrents"))
+        try await post(path: "torrents", body: body)
+    }
+
+    private func post(
+        path: String,
+        body: [String: Any],
+        timeout: TimeInterval = 15
+    ) async throws -> Data {
+        var request = URLRequest(url: baseURL.appendingPathComponent(path))
         request.httpMethod = "POST"
-        request.timeoutInterval = 15
+        request.timeoutInterval = timeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return try await perform(request)
@@ -345,6 +397,59 @@ final class NativeTorrServerAPI {
             )
         }
         return data
+    }
+}
+
+struct TorrServerCacheState: Decodable {
+    let capacity: Int64
+    let filled: Int64
+    let hash: String
+
+    enum CodingKeys: String, CodingKey {
+        case capacity
+        case filled
+        case hash
+        case capacityUpper = "Capacity"
+        case filledUpper = "Filled"
+        case hashUpper = "Hash"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        capacity = try container.decodeIfPresent(Int64.self, forKey: .capacity)
+            ?? container.decodeIfPresent(Int64.self, forKey: .capacityUpper)
+            ?? 0
+        filled = try container.decodeIfPresent(Int64.self, forKey: .filled)
+            ?? container.decodeIfPresent(Int64.self, forKey: .filledUpper)
+            ?? 0
+        hash = try container.decodeIfPresent(String.self, forKey: .hash)
+            ?? container.decodeIfPresent(String.self, forKey: .hashUpper)
+            ?? ""
+    }
+}
+
+struct TorrServerStorageSettings {
+    let cacheSize: Int64
+    let useDisk: Bool
+    let torrentsSavePath: String
+    let removeCacheOnDrop: Bool
+
+    init(data: Data) throws {
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw AppError("TorrServer returned invalid settings data.")
+        }
+
+        func value(_ names: [String]) -> Any? {
+            for name in names where object[name] != nil { return object[name] }
+            return nil
+        }
+
+        cacheSize = (value(["cacheSize", "CacheSize"]) as? NSNumber)?.int64Value ?? 0
+        useDisk = (value(["useDisk", "UseDisk"]) as? NSNumber)?.boolValue ?? false
+        torrentsSavePath = value(["torrentsSavePath", "TorrentsSavePath"]) as? String ?? ""
+        removeCacheOnDrop = (value([
+            "removeCacheOnDrop", "RemoveCacheOnDrop"
+        ]) as? NSNumber)?.boolValue ?? false
     }
 }
 

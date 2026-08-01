@@ -5,6 +5,21 @@ struct LibraryMetadata: Codable, Equatable {
     let posterURL: String
     let summary: String
     let source: String
+    let sourceURL: String?
+
+    init(
+        title: String,
+        posterURL: String,
+        summary: String,
+        source: String,
+        sourceURL: String? = nil
+    ) {
+        self.title = title
+        self.posterURL = posterURL
+        self.summary = summary
+        self.source = source
+        self.sourceURL = sourceURL
+    }
 }
 
 final class LibraryMetadataStore {

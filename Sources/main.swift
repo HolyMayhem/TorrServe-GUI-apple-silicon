@@ -14,6 +14,10 @@ private let hideDockIconKey = "HideDockIcon"
 private let languageKey = "AppLanguage"
 private let notificationsEnabledKey = "NotificationsEnabled"
 private let speedDisplayUnitKey = "SpeedDisplayUnit"
+private let iinaDownloadURL = URL(string: "https://iina.io/download/")!
+private let vlcDownloadURL = URL(
+    string: "https://www.videolan.org/vlc/download-macosx.html"
+)!
 
 struct AppError: LocalizedError {
     let message: String
@@ -45,6 +49,13 @@ struct Texts {
 
     var about: String { language == .russian ? "О TorrServer" : "About TorrServer" }
     var quit: String { language == .russian ? "Завершить приложение" : "Quit" }
+    var edit: String { language == .russian ? "Правка" : "Edit" }
+    var undo: String { language == .russian ? "Отменить" : "Undo" }
+    var redo: String { language == .russian ? "Повторить" : "Redo" }
+    var cut: String { language == .russian ? "Вырезать" : "Cut" }
+    var copy: String { language == .russian ? "Копировать" : "Copy" }
+    var paste: String { language == .russian ? "Вставить" : "Paste" }
+    var selectAll: String { language == .russian ? "Выбрать всё" : "Select All" }
     var title: String { "TorrServer" }
     var choose: String { language == .russian ? "Выбрать" : "Choose" }
     var downloadArm: String { language == .russian ? "Скачать ARM" : "Download ARM" }
@@ -84,6 +95,14 @@ struct Texts {
         language == .russian
             ? "Показывать приложение только в меню баре"
             : "Show app in menu bar only"
+    }
+    var playerHelpTitle: String {
+        language == .russian ? "Плееры для просмотра" : "Playback apps"
+    }
+    var playerHelpMessage: String {
+        language == .russian
+            ? "Приложение автоматически проверяет IINA, VLC и Infuse. Нажмите установленный плеер, чтобы выбрать его."
+            : "The app automatically checks IINA, VLC, and Infuse. Select any installed player to make it the default."
     }
     var languageLabel: String { language == .russian ? "Язык" : "Language" }
     var russian: String { "Russian" }
@@ -895,12 +914,21 @@ final class NotificationController: NSObject, UNUserNotificationCenterDelegate {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
+    private enum MenuBarVisualState {
+        case stopped
+        case running
+        case streaming
+        case buffering
+        case failed
+        case updating
+    }
     private let processController = TorrServerProcessController()
     private let downloader = TorrServerDownloader()
     private let launchAtLoginController = LaunchAtLoginController()
     private let speedMonitor = TorrServerSpeedMonitor()
     private let libraryClient = TorrServerLibraryClient()
     private let notificationController = NotificationController()
+    private let diagnosticsService = TorrServerDiagnosticsService()
     private let mainWindowModel = MainWindowModel()
     private let libraryModel = LibraryViewModel()
     private let searchModel = SearchViewModel()
@@ -912,6 +940,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var statusItem: NSStatusItem!
     private var statusPopover: NSPopover!
     private var popoverRefreshTimer: Timer?
+    private var menuBarMaterialTimer: Timer?
+    private var menuBarAnimationTimer: Timer?
+    private var localPopoverEventMonitor: Any?
+    private var globalPopoverEventMonitor: Any?
 
     private var isDownloading = false
     private var hasRepliedToTermination = false
@@ -920,6 +952,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var currentTorrents: [TorrentSummary] = []
     private var speedHistory: [Double] = []
     private var hasAnnouncedRunningState = false
+    private var menuBarAnimationPhase: CGFloat = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         registerDefaultSettings()
@@ -937,6 +970,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             self?.recordSpeedSample(speed)
         }
         updateUI(for: .stopped)
+        refreshPlayerAvailability()
+        refreshStorage()
 
         window.center()
         window.makeKeyAndOrderFront(nil)
@@ -1120,10 +1155,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     @objc private func showAboutPanel(_ sender: Any?) {
         let version = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"
-        ) as? String ?? "2.2.2"
+        ) as? String ?? "2.4.1"
         let build = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleVersion"
-        ) as? String ?? "19"
+        ) as? String ?? "24"
         let credits = NSAttributedString(
             string: texts.aboutCredits,
             attributes: [
@@ -1256,6 +1291,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         mainWindowModel.onSectionChanged = { [weak self] section in
             self?.resizeWindow(for: section)
         }
+        mainWindowModel.onOpenIINADownload = {
+            NSWorkspace.shared.open(iinaDownloadURL)
+        }
+        mainWindowModel.onOpenVLCDownload = {
+            NSWorkspace.shared.open(vlcDownloadURL)
+        }
+        mainWindowModel.onOpenInfuseDownload = {
+            guard let url = ExternalPlayerChoice.infuse.downloadURL else { return }
+            NSWorkspace.shared.open(url)
+        }
+        mainWindowModel.onSelectPlayer = { [weak self] choice in
+            guard let self else { return }
+            self.libraryModel.setPlayer(choice, language: self.currentLanguage)
+            self.refreshPlayerAvailability()
+        }
+        libraryModel.onPlayerChanged = { [weak self] _ in
+            self?.refreshPlayerAvailability()
+        }
+        mainWindowModel.onRefreshStorage = { [weak self] in
+            self?.refreshStorage()
+        }
+        mainWindowModel.onClearCache = { [weak self] in
+            self?.clearTorrServerCache()
+        }
+        mainWindowModel.onCheckPort = { [weak self] in
+            self?.checkTorrServerPort()
+        }
+        mainWindowModel.onFindTorrServer = { [weak self] in
+            self?.findOtherTorrServerProcesses()
+        }
+        mainWindowModel.onCheckExecutable = { [weak self] in
+            self?.checkTorrServerExecutable()
+        }
+        mainWindowModel.onCopyDiagnosticReport = { [weak self] in
+            self?.copyDiagnosticReport()
+        }
         searchModel.onTorrentAdded = { [weak self] hash in
             self?.libraryModel.refresh(selectingHash: hash)
         }
@@ -1270,7 +1341,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         window.contentView = hostingView
         hostingView.layoutSubtreeIfNeeded()
 
-        let fixedContentSize = hostingView.fittingSize
+        let fixedContentSize = NSSize(width: 920, height: 600)
         serverContentSize = fixedContentSize
         window.setContentSize(fixedContentSize)
         window.contentMinSize = fixedContentSize
@@ -1280,13 +1351,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private func resizeWindow(for section: AppSection) {
         guard window != nil else { return }
 
-        let targetSize: NSSize
-        switch section {
-        case .server:
-            targetSize = serverContentSize
-        case .library, .search:
-            targetSize = NSSize(width: 920, height: 640)
-        }
+        let targetSize = serverContentSize
+
+        guard window.contentView?.frame.size != targetSize else { return }
 
         let currentFrame = window.frame
         let contentRect = NSRect(origin: .zero, size: targetSize)
@@ -1358,6 +1425,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             keyEquivalent: "q"
         )
         appMenuItem.submenu = appMenu
+
+        let editMenuItem = NSMenuItem(
+            title: texts.edit,
+            action: nil,
+            keyEquivalent: ""
+        )
+        let editMenu = NSMenu(title: texts.edit)
+
+        let undoItem = editMenu.addItem(
+            withTitle: texts.undo,
+            action: Selector(("undo:")),
+            keyEquivalent: "z"
+        )
+        undoItem.keyEquivalentModifierMask = [.command]
+
+        let redoItem = editMenu.addItem(
+            withTitle: texts.redo,
+            action: Selector(("redo:")),
+            keyEquivalent: "z"
+        )
+        redoItem.keyEquivalentModifierMask = [.command, .shift]
+
+        editMenu.addItem(.separator())
+
+        let cutItem = editMenu.addItem(
+            withTitle: texts.cut,
+            action: #selector(NSText.cut(_:)),
+            keyEquivalent: "x"
+        )
+        cutItem.keyEquivalentModifierMask = [.command]
+
+        let copyItem = editMenu.addItem(
+            withTitle: texts.copy,
+            action: #selector(NSText.copy(_:)),
+            keyEquivalent: "c"
+        )
+        copyItem.keyEquivalentModifierMask = [.command]
+
+        let pasteItem = editMenu.addItem(
+            withTitle: texts.paste,
+            action: #selector(NSText.paste(_:)),
+            keyEquivalent: "v"
+        )
+        pasteItem.keyEquivalentModifierMask = [.command]
+
+        editMenu.addItem(.separator())
+
+        let selectAllItem = editMenu.addItem(
+            withTitle: texts.selectAll,
+            action: #selector(NSText.selectAll(_:)),
+            keyEquivalent: "a"
+        )
+        selectAllItem.keyEquivalentModifierMask = [.command]
+
+        editMenuItem.submenu = editMenu
+        mainMenu.addItem(editMenuItem)
         NSApp.mainMenu = mainMenu
     }
 
@@ -1409,18 +1532,79 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         refreshPopoverMaterial()
         startPopoverRefreshTimer()
         synchronizePopoverLayout()
+        NSApp.activate(ignoringOtherApps: true)
         statusPopover.show(
             relativeTo: button.bounds,
             of: button,
             preferredEdge: .minY
         )
+        beginMonitoringPopoverDismissal()
         synchronizePopoverLayout()
-        NSApp.activate(ignoringOtherApps: true)
+
+        DispatchQueue.main.async { [weak self] in
+            guard
+                let self,
+                self.statusPopover.isShown,
+                let contentView = self.statusPopover.contentViewController?.view,
+                let popoverWindow = contentView.window
+            else {
+                return
+            }
+
+            popoverWindow.makeKey()
+            popoverWindow.makeFirstResponder(contentView)
+        }
     }
 
     func popoverDidClose(_ notification: Notification) {
         popoverRefreshTimer?.invalidate()
         popoverRefreshTimer = nil
+        stopMonitoringPopoverDismissal()
+    }
+
+    private func beginMonitoringPopoverDismissal() {
+        stopMonitoringPopoverDismissal()
+
+        localPopoverEventMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self] event in
+            guard
+                let self,
+                self.statusPopover.isShown
+            else {
+                return event
+            }
+
+            let popoverWindow = self.statusPopover.contentViewController?.view.window
+            let statusItemWindow = self.statusItem.button?.window
+            if event.window === popoverWindow || event.window === statusItemWindow {
+                return event
+            }
+
+            self.statusPopover.performClose(nil)
+            return event
+        }
+
+        globalPopoverEventMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard self?.statusPopover.isShown == true else { return }
+                self?.statusPopover.performClose(nil)
+            }
+        }
+    }
+
+    private func stopMonitoringPopoverDismissal() {
+        if let localPopoverEventMonitor {
+            NSEvent.removeMonitor(localPopoverEventMonitor)
+            self.localPopoverEventMonitor = nil
+        }
+
+        if let globalPopoverEventMonitor {
+            NSEvent.removeMonitor(globalPopoverEventMonitor)
+            self.globalPopoverEventMonitor = nil
+        }
     }
 
     private func startPopoverRefreshTimer() {
@@ -1503,6 +1687,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             currentTorrents = []
             popoverModel.isLoadingMaterial = false
             updatePopoverMaterial(with: [])
+            refreshSpeedDisplay()
             return
         }
 
@@ -1520,7 +1705,101 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 self.updatePopoverMaterial(with: [])
             }
             self.synchronizePopoverLayout()
+            self.refreshSpeedDisplay()
         }
+    }
+
+    private func refreshPlayerAvailability() {
+        libraryModel.refreshDetectedPlayers()
+        mainWindowModel.detectedPlayers = libraryModel.detectedPlayers
+        mainWindowModel.preferredPlayer = libraryModel.playerChoice
+    }
+
+    private func refreshStorage() {
+        guard !mainWindowModel.isRefreshingStorage else { return }
+        mainWindowModel.isRefreshingStorage = true
+        let torrents = libraryModel.torrents
+        Task { [weak self] in
+            guard let self else { return }
+            let snapshot = await self.diagnosticsService.storageSnapshot(torrents: torrents)
+            self.mainWindowModel.storage = snapshot
+            self.mainWindowModel.isRefreshingStorage = false
+        }
+    }
+
+    private func clearTorrServerCache() {
+        guard !mainWindowModel.isClearingCache else { return }
+        mainWindowModel.isClearingCache = true
+        let torrents = libraryModel.torrents
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.diagnosticsService.clearCache(torrents: torrents)
+                self.libraryModel.refresh(silently: true)
+            } catch {
+                self.showAlert(title: "TorrServer", message: error.localizedDescription)
+            }
+            self.mainWindowModel.isClearingCache = false
+            self.refreshStorage()
+        }
+    }
+
+    private func checkTorrServerPort() {
+        mainWindowModel.portDiagnostic = DiagnosticResult(
+            kind: .checking,
+            message: ""
+        )
+        mainWindowModel.latestDiagnostic = mainWindowModel.portDiagnostic
+        Task { [weak self] in
+            guard let self else { return }
+            self.mainWindowModel.portDiagnostic = await self.diagnosticsService.checkPort(
+                language: self.currentLanguage
+            )
+            self.mainWindowModel.latestDiagnostic = self.mainWindowModel.portDiagnostic
+        }
+    }
+
+    private func findOtherTorrServerProcesses() {
+        mainWindowModel.processDiagnostic = DiagnosticResult(
+            kind: .checking,
+            message: ""
+        )
+        mainWindowModel.latestDiagnostic = mainWindowModel.processDiagnostic
+        Task { [weak self] in
+            guard let self else { return }
+            self.mainWindowModel.processDiagnostic = await self.diagnosticsService
+                .findTorrServerProcesses(language: self.currentLanguage)
+            self.mainWindowModel.latestDiagnostic = self.mainWindowModel.processDiagnostic
+        }
+    }
+
+    private func checkTorrServerExecutable() {
+        mainWindowModel.executableDiagnostic = DiagnosticResult(
+            kind: .checking,
+            message: ""
+        )
+        mainWindowModel.latestDiagnostic = mainWindowModel.executableDiagnostic
+        let path = executablePath
+        Task { [weak self] in
+            guard let self else { return }
+            self.mainWindowModel.executableDiagnostic = await self.diagnosticsService
+                .inspectExecutable(path: path, language: self.currentLanguage)
+            self.mainWindowModel.latestDiagnostic = self.mainWindowModel.executableDiagnostic
+        }
+    }
+
+    private func copyDiagnosticReport() {
+        let report = diagnosticsService.report(
+            status: mainWindowModel.statusText,
+            tooltip: mainWindowModel.statusTooltip,
+            executablePath: executablePath,
+            storage: mainWindowModel.storage,
+            port: mainWindowModel.portDiagnostic,
+            process: mainWindowModel.processDiagnostic,
+            executable: mainWindowModel.executableDiagnostic
+        )
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(report, forType: .string)
     }
 
     private func updatePopoverMaterial(with torrents: [TorrentSummary]) {
@@ -1595,6 +1874,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 menuStatus: texts.running(pid: pid),
                 statusIconColor: .systemGreen
             )
+            refreshStorage()
 
         case .stopping:
             applyUIState(
@@ -1638,12 +1918,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         if shouldRun {
             speedMonitor.start()
+            startMenuBarMaterialTimer()
         } else {
             speedMonitor.stop()
+            menuBarMaterialTimer?.invalidate()
+            menuBarMaterialTimer = nil
             currentSpeedBytesPerSecond = nil
             speedHistory.removeAll()
             popoverModel.speedSamples = []
             updatePopoverMaterial(with: [])
+        }
+    }
+
+    private func startMenuBarMaterialTimer() {
+        guard menuBarMaterialTimer == nil else { return }
+        refreshPopoverMaterial()
+        menuBarMaterialTimer = Timer.scheduledTimer(
+            withTimeInterval: 2,
+            repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshPopoverMaterial()
+            }
         }
     }
 
@@ -1742,25 +2038,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         return .stopped
     }
 
-    private func makeMenuBarImage(color: NSColor) -> NSImage {
-        let size = NSSize(width: 20, height: 20)
+    private var menuBarVisualState: MenuBarVisualState {
+        if isDownloading { return .updating }
+        if mainWindowModel.statusKind == .failed { return .failed }
+        guard processController.isRunning else { return .stopped }
+        if currentTorrents.contains(where: { $0.status == 2 }) { return .buffering }
+        if currentTorrents.contains(where: { $0.status == 3 })
+            || (currentSpeedBytesPerSecond ?? 0) > 0 {
+            return .streaming
+        }
+        return .running
+    }
+
+    private func makeMenuBarImage(
+        state: MenuBarVisualState,
+        phase: CGFloat
+    ) -> NSImage {
+        let size = NSSize(width: 18, height: 18)
         let image = NSImage(size: size)
         image.lockFocus()
 
-        let rect = NSRect(x: 0.75, y: 0.75, width: 18.5, height: 18.5)
+        let color: NSColor
+        switch state {
+        case .stopped: color = .systemGray
+        case .running, .streaming: color = .systemGreen
+        case .buffering, .updating: color = .systemOrange
+        case .failed: color = .systemRed
+        }
+
+        let pulse = state == .streaming ? (0.22 + phase * 0.13) : 0.18
+        let glowRect = NSRect(x: 1.25, y: 1.25, width: 15.5, height: 15.5)
+        color.withAlphaComponent(pulse).setFill()
+        NSBezierPath(ovalIn: glowRect).fill()
+
+        let rect = NSRect(x: 2.45, y: 2.45, width: 13.1, height: 13.1)
         color.setFill()
         NSBezierPath(ovalIn: rect).fill()
 
-        NSColor.white.setFill()
+        NSColor.white.withAlphaComponent(0.95).setFill()
         let bolt = NSBezierPath()
-        bolt.move(to: NSPoint(x: 11.25, y: 18))
-        bolt.line(to: NSPoint(x: 4.8, y: 9.7))
-        bolt.line(to: NSPoint(x: 9.1, y: 9.7))
-        bolt.line(to: NSPoint(x: 7.2, y: 2.1))
-        bolt.line(to: NSPoint(x: 15.3, y: 11.2))
-        bolt.line(to: NSPoint(x: 10.8, y: 11.2))
+        bolt.move(to: NSPoint(x: 10.1, y: 14.1))
+        bolt.line(to: NSPoint(x: 6.25, y: 9.25))
+        bolt.line(to: NSPoint(x: 8.65, y: 9.25))
+        bolt.line(to: NSPoint(x: 7.65, y: 4.35))
+        bolt.line(to: NSPoint(x: 12.15, y: 9.85))
+        bolt.line(to: NSPoint(x: 9.75, y: 9.85))
         bolt.close()
         bolt.fill()
+
+        if state == .updating {
+            let ringRect = NSRect(x: 0.8, y: 0.8, width: 16.4, height: 16.4)
+            let ring = NSBezierPath()
+            ring.appendArc(
+                withCenter: NSPoint(x: ringRect.midX, y: ringRect.midY),
+                radius: ringRect.width / 2,
+                startAngle: 90 - phase * 360,
+                endAngle: 220 - phase * 360
+            )
+            ring.lineWidth = 1.2
+            ring.lineCapStyle = .round
+            NSColor.white.withAlphaComponent(0.9).setStroke()
+            ring.stroke()
+        }
 
         image.unlockFocus()
         image.isTemplate = false
@@ -1798,11 +2137,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         statusItem.length = title.isEmpty
             ? NSStatusItem.squareLength
             : NSStatusItem.variableLength
-        statusItem.button?.image = makeMenuBarImage(color: currentStatusIconColor)
+        updateMenuBarAnimationTimer()
+        statusItem.button?.image = makeMenuBarImage(
+            state: menuBarVisualState,
+            phase: menuBarAnimationPhase
+        )
         statusItem.button?.title = title.isEmpty ? "" : " \(title)"
         statusItem.button?.toolTip = title.isEmpty
             ? "TorrServer"
             : "TorrServer · \(title)"
+    }
+
+    private func updateMenuBarAnimationTimer() {
+        let state = menuBarVisualState
+        let needsAnimation = state == .streaming || state == .updating
+        guard needsAnimation else {
+            menuBarAnimationTimer?.invalidate()
+            menuBarAnimationTimer = nil
+            menuBarAnimationPhase = 0
+            return
+        }
+        guard menuBarAnimationTimer == nil else { return }
+        let interval: TimeInterval = state == .updating ? 0.14 : 0.8
+        menuBarAnimationTimer = Timer.scheduledTimer(
+            withTimeInterval: interval,
+            repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.menuBarAnimationPhase += state == .updating ? 0.08 : 1
+                if self.menuBarAnimationPhase > 1 {
+                    self.menuBarAnimationPhase = 0
+                }
+                self.statusItem.button?.image = self.makeMenuBarImage(
+                    state: self.menuBarVisualState,
+                    phase: self.menuBarAnimationPhase
+                )
+            }
+        }
     }
 
     private static func formatFileSize(_ bytes: Int64) -> String {

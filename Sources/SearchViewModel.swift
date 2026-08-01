@@ -5,6 +5,14 @@ import Security
 private let jackettServerURLKey = "JackettServerURL"
 private let jackettAPIKeyKey = "JackettAPIKey"
 
+enum SearchSortField: String, CaseIterable, Identifiable {
+    case seeders
+    case peers
+    case size
+
+    var id: String { rawValue }
+}
+
 @MainActor
 final class SearchViewModel: ObservableObject {
     @Published var serverURL: String
@@ -20,6 +28,8 @@ final class SearchViewModel: ObservableObject {
     @Published var connectionIsHealthy = false
     @Published var showsSettings = false
     @Published var alert: LibraryAlert?
+    @Published var sortField: SearchSortField = .seeders
+    @Published var sortAscending = false
 
     var onTorrentAdded: ((String) -> Void)?
 
@@ -40,9 +50,20 @@ final class SearchViewModel: ObservableObject {
             ?? "http://127.0.0.1:9117"
         let legacyAPIKey = UserDefaults.standard.string(forKey: jackettAPIKeyKey)
             ?? ""
-        apiKey = credentialStore.read() ?? legacyAPIKey
-        if !legacyAPIKey.isEmpty, credentialStore.save(legacyAPIKey) {
-            UserDefaults.standard.removeObject(forKey: jackettAPIKeyKey)
+        apiKey = legacyAPIKey
+        let credentialStore = self.credentialStore
+
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let storedAPIKey = credentialStore.read()
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if let storedAPIKey, !storedAPIKey.isEmpty {
+                    self.apiKey = storedAPIKey
+                } else if !legacyAPIKey.isEmpty,
+                          credentialStore.save(legacyAPIKey) {
+                    UserDefaults.standard.removeObject(forKey: jackettAPIKeyKey)
+                }
+            }
         }
     }
 
@@ -57,6 +78,30 @@ final class SearchViewModel: ObservableObject {
     var selectedResult: JackettSearchResult? {
         guard let selectedResultID else { return nil }
         return results.first { $0.id == selectedResultID }
+    }
+
+    var sortedResults: [JackettSearchResult] {
+        results.sorted { left, right in
+            let leftValue = sortValue(for: left)
+            let rightValue = sortValue(for: right)
+
+            if sortField == .size {
+                if leftValue <= 0, rightValue > 0 { return false }
+                if rightValue <= 0, leftValue > 0 { return true }
+            }
+
+            if leftValue != rightValue {
+                return sortAscending
+                    ? leftValue < rightValue
+                    : leftValue > rightValue
+            }
+
+            if left.seeders != right.seeders {
+                return left.seeders > right.seeders
+            }
+            return left.title.localizedCaseInsensitiveCompare(right.title)
+                == .orderedAscending
+        }
     }
 
     func saveSettings() {
@@ -119,7 +164,7 @@ final class SearchViewModel: ObservableObject {
                     configuration: configuration
                 )
                 results = values
-                selectedResultID = values.first?.id
+                selectedResultID = sortedResults.first?.id
                 connectionIsHealthy = true
             } catch {
                 connectionIsHealthy = false
@@ -133,6 +178,10 @@ final class SearchViewModel: ObservableObject {
 
     func select(_ result: JackettSearchResult) {
         selectedResultID = result.id
+    }
+
+    func toggleSortDirection() {
+        sortAscending.toggle()
     }
 
     func add(
@@ -187,7 +236,8 @@ final class SearchViewModel: ObservableObject {
                         title: result.title,
                         posterURL: poster,
                         summary: result.summary,
-                        source: result.tracker.isEmpty ? "Jackett" : result.tracker
+                        source: result.tracker.isEmpty ? "Jackett" : result.tracker,
+                        sourceURL: result.detailsURL?.absoluteString
                     ),
                     for: hash
                 )
@@ -218,9 +268,20 @@ final class SearchViewModel: ObservableObject {
         guard let url = result.detailsURL else { return }
         NSWorkspace.shared.open(url)
     }
+
+    private func sortValue(for result: JackettSearchResult) -> Int64 {
+        switch sortField {
+        case .seeders:
+            return Int64(result.seeders)
+        case .peers:
+            return Int64(result.peers)
+        case .size:
+            return result.size
+        }
+    }
 }
 
-private final class JackettCredentialStore {
+private final class JackettCredentialStore: @unchecked Sendable {
     private let service = "\(Bundle.main.bundleIdentifier ?? "local.codex.torrserver-manager").jackett"
     private let account = "api-key"
 

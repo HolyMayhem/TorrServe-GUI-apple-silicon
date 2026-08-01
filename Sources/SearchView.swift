@@ -112,6 +112,11 @@ struct SearchView: View {
                 Label(texts.results, systemImage: "list.bullet.rectangle")
                     .font(.headline)
                 Spacer()
+
+                if !model.results.isEmpty {
+                    sortMenu
+                }
+
                 if !model.results.isEmpty {
                     Text("\(model.results.count)")
                         .font(.caption.monospacedDigit())
@@ -126,7 +131,7 @@ struct SearchView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 6) {
-                        ForEach(model.results) { result in
+                        ForEach(model.sortedResults) { result in
                             SearchResultRow(
                                 result: result,
                                 isSelected: model.selectedResultID == result.id,
@@ -143,6 +148,49 @@ struct SearchView: View {
         }
         .padding(14)
         .searchPanel()
+    }
+
+    private var sortMenu: some View {
+        Menu {
+            ForEach(SearchSortField.allCases) { field in
+                Button {
+                    model.sortField = field
+                } label: {
+                    if model.sortField == field {
+                        Label(
+                            texts.sortTitle(for: field),
+                            systemImage: "checkmark"
+                        )
+                    } else {
+                        Text(texts.sortTitle(for: field))
+                    }
+                }
+            }
+
+            Divider()
+
+            Button {
+                model.toggleSortDirection()
+            } label: {
+                Label(
+                    model.sortAscending
+                        ? texts.ascending
+                        : texts.descending,
+                    systemImage: model.sortAscending
+                        ? "arrow.up"
+                        : "arrow.down"
+                )
+            }
+        } label: {
+            Label(
+                texts.sortTitle(for: model.sortField),
+                systemImage: model.sortAscending ? "arrow.up" : "arrow.down"
+            )
+            .font(.caption)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help(texts.sort)
     }
 
     @ViewBuilder
@@ -357,6 +405,8 @@ private struct SearchResultRow: View {
                     HStack(spacing: 6) {
                         Label("\(result.seeders)", systemImage: "arrow.up")
                             .foregroundStyle(result.seeders > 0 ? Color.green : .secondary)
+                        Label("\(result.peers)", systemImage: "person.2")
+                            .foregroundStyle(result.peers > 0 ? Color.blue : .secondary)
                         Text(SearchFormat.fileSize(result.size))
                         if !result.tracker.isEmpty {
                             Text(result.tracker)
@@ -609,6 +659,23 @@ struct SearchTexts {
             : "Movie or series title"
     }
     var results: String { language == .russian ? "Результаты" : "Results" }
+    var sort: String { language == .russian ? "Сортировка" : "Sort" }
+    var ascending: String {
+        language == .russian ? "По возрастанию" : "Ascending"
+    }
+    var descending: String {
+        language == .russian ? "По убыванию" : "Descending"
+    }
+    func sortTitle(for field: SearchSortField) -> String {
+        switch field {
+        case .seeders:
+            return language == .russian ? "Сиды" : "Seeders"
+        case .peers:
+            return language == .russian ? "Пиры" : "Peers"
+        case .size:
+            return language == .russian ? "Размер" : "Size"
+        }
+    }
     var searching: String { language == .russian ? "Поиск в Jackett…" : "Searching Jackett…" }
     var startSearching: String { language == .russian ? "Найдите фильм" : "Find something to watch" }
     var startSearchingHint: String {
