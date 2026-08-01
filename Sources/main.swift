@@ -39,7 +39,6 @@ private func migrateLegacyPreferencesIfNeeded() {
             showSpeedInMenuBarKey,
             hideDockIconKey,
             languageKey,
-            notificationsEnabledKey,
             speedDisplayUnitKey,
             jackettSearchEnabledKey,
             "JackettServerURL",
@@ -952,8 +951,10 @@ enum LocalWebUIAddress {
     }
 }
 
+@MainActor
 final class NotificationController: NSObject, UNUserNotificationCenterDelegate {
     private let center = UNUserNotificationCenter.current()
+    private var authorizationRequestInFlight = false
 
     override init() {
         super.init()
@@ -967,11 +968,50 @@ final class NotificationController: NSObject, UNUserNotificationCenterDelegate {
             return
         }
 
-        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
-            DispatchQueue.main.async {
-                UserDefaults.standard.set(granted, forKey: notificationsEnabledKey)
-                completion(granted)
+        guard !authorizationRequestInFlight else { return }
+        authorizationRequestInFlight = true
+
+        Task { [weak self] in
+            guard let self else { return }
+            let settings = await center.notificationSettings()
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                finishAuthorization(granted: true, completion: completion)
+
+            case .notDetermined:
+                do {
+                    let granted = try await center.requestAuthorization(
+                        options: [.alert, .sound]
+                    )
+                    finishAuthorization(granted: granted, completion: completion)
+                } catch {
+                    finishAuthorization(granted: false, completion: completion)
+                }
+
+            case .denied:
+                finishAuthorization(granted: false, completion: completion)
+
+            @unknown default:
+                finishAuthorization(granted: false, completion: completion)
             }
+        }
+    }
+
+    func synchronizeEnabledState(completion: @escaping (Bool) -> Void) {
+        Task { [weak self] in
+            guard let self else { return }
+            let settings = await center.notificationSettings()
+            let enabled: Bool
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                enabled = UserDefaults.standard.bool(forKey: notificationsEnabledKey)
+            case .notDetermined, .denied:
+                enabled = false
+            @unknown default:
+                enabled = false
+            }
+            UserDefaults.standard.set(enabled, forKey: notificationsEnabledKey)
+            completion(enabled)
         }
     }
 
@@ -980,21 +1020,42 @@ final class NotificationController: NSObject, UNUserNotificationCenterDelegate {
             return
         }
 
-        let content = UNMutableNotificationContent()
-        content.title = title
-        content.body = body
-        content.sound = .default
+        Task { [weak self] in
+            guard let self else { return }
+            let settings = await center.notificationSettings()
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                let content = UNMutableNotificationContent()
+                content.title = title
+                content.body = body
+                content.sound = .default
 
-        center.add(
-            UNNotificationRequest(
-                identifier: UUID().uuidString,
-                content: content,
-                trigger: nil
-            )
-        )
+                try? await center.add(
+                    UNNotificationRequest(
+                        identifier: UUID().uuidString,
+                        content: content,
+                        trigger: nil
+                    )
+                )
+
+            case .notDetermined, .denied:
+                break
+            @unknown default:
+                break
+            }
+        }
     }
 
-    func userNotificationCenter(
+    private func finishAuthorization(
+        granted: Bool,
+        completion: @escaping (Bool) -> Void
+    ) {
+        authorizationRequestInFlight = false
+        UserDefaults.standard.set(granted, forKey: notificationsEnabledKey)
+        completion(granted)
+    }
+
+    nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
@@ -1046,6 +1107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var hasAnnouncedRunningState = false
     private var menuBarAnimationPhase: CGFloat = 0
     private var diagnosticsRevision = 0
+    private var isNotificationAuthorizationPending = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         registerDefaultSettings()
@@ -1055,6 +1117,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         buildStatusItem()
         buildWindow()
         applyLanguage()
+        notificationController.synchronizeEnabledState { [weak self] enabled in
+            self?.mainWindowModel.notificationsEnabled = enabled
+        }
 
         processController.onStateChange = { [weak self] state in
             self?.handleNotification(for: state)
@@ -1244,8 +1309,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func setNotificationsEnabled(_ enabled: Bool) {
+        guard !isNotificationAuthorizationPending else { return }
+
+        mainWindowModel.notificationsEnabled = enabled
+        mainWindowModel.notificationsAuthorizationPending = enabled
+        isNotificationAuthorizationPending = enabled
         notificationController.setEnabled(enabled) { [weak self] granted in
             guard let self else { return }
+            self.isNotificationAuthorizationPending = false
+            self.mainWindowModel.notificationsAuthorizationPending = false
             self.mainWindowModel.notificationsEnabled = granted
 
             if enabled && !granted {
@@ -2342,9 +2414,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         mainWindowModel.autoStartServer = UserDefaults.standard.bool(forKey: autoStartServerKey)
         mainWindowModel.showSpeed = isSpeedDisplayEnabled
         mainWindowModel.hideDockIcon = UserDefaults.standard.bool(forKey: hideDockIconKey)
-        mainWindowModel.notificationsEnabled = UserDefaults.standard.bool(
-            forKey: notificationsEnabledKey
-        )
+        if !isNotificationAuthorizationPending {
+            mainWindowModel.notificationsEnabled = UserDefaults.standard.bool(
+                forKey: notificationsEnabledKey
+            )
+        }
         mainWindowModel.jackettEnabled = UserDefaults.standard.bool(
             forKey: jackettSearchEnabledKey
         )

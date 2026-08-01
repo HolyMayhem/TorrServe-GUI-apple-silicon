@@ -40,6 +40,7 @@ final class MainWindowModel: ObservableObject {
     @Published var showSpeed = true
     @Published var hideDockIcon = false
     @Published var notificationsEnabled = false
+    @Published var notificationsAuthorizationPending = false
     @Published var jackettEnabled = true
     @Published var speedUnit: SpeedDisplayUnit = .automatic
     @Published var selectedSection: AppSection = .server
@@ -223,6 +224,7 @@ struct MainWindowView: View {
                         title: texts.notifications,
                         systemImage: "bell.badge",
                         isOn: model.notificationsEnabled,
+                        isEnabled: !model.notificationsAuthorizationPending,
                         onChange: { model.onNotificationsChanged?($0) }
                     )
                 }
@@ -893,6 +895,7 @@ private struct GlassToggleRow: View {
     let title: String
     let systemImage: String
     let isOn: Bool
+    var isEnabled = true
     let onChange: (Bool) -> Void
 
     var body: some View {
@@ -921,6 +924,7 @@ private struct GlassToggleRow: View {
             .labelsHidden()
             .toggleStyle(.switch)
             .controlSize(.small)
+            .disabled(!isEnabled)
             .accessibilityLabel(title)
         }
         .frame(maxWidth: .infinity)
