@@ -139,19 +139,30 @@ final class LibraryViewModel: ObservableObject {
     @Published var detectedPlayers: [DetectedPlayer] = []
     @Published var pendingDeletionTorrentID: String?
     @Published private(set) var metadataByHash: [String: LibraryMetadata] = [:]
+    @Published private(set) var resolvingMetadataHashes: Set<String> = []
 
     var onPlayerChanged: ((ExternalPlayerChoice) -> Void)?
 
     private let api: NativeTorrServerAPI
     private let metadataStore: LibraryMetadataStore
+    private let metadataResolver: MetadataResolver
+    private let metadataSettings: MetadataSettingsStore
     private var refreshTimer: Timer?
+    private var metadataResolutionTasks: [String: Task<Void, Never>] = [:]
+    private var metadataRetryAfter: [String: Date] = [:]
+    private var metadataLanguage = AppLanguage.systemDefault
+    private var metadataConfigurationRevision = 0
 
     init(
         api: NativeTorrServerAPI = NativeTorrServerAPI(),
-        metadataStore: LibraryMetadataStore = .shared
+        metadataStore: LibraryMetadataStore = .shared,
+        metadataResolver: MetadataResolver = MetadataResolver(),
+        metadataSettings: MetadataSettingsStore = .shared
     ) {
         self.api = api
         self.metadataStore = metadataStore
+        self.metadataResolver = metadataResolver
+        self.metadataSettings = metadataSettings
         playerChoice = ExternalPlayerChoice(
             rawValue: UserDefaults.standard.string(forKey: libraryPlayerKey) ?? ""
         ) ?? .quickTime
@@ -215,6 +226,7 @@ final class LibraryViewModel: ObservableObject {
                 let values = try await api.listTorrents()
                 torrents = values
                 metadataByHash = metadataStore.allMetadata()
+                resolveMetadataIfNeeded(for: values)
 
                 if let selectedTorrentID,
                    !values.contains(where: { $0.id == selectedTorrentID }) {
@@ -246,6 +258,25 @@ final class LibraryViewModel: ObservableObject {
 
     func metadata(for torrent: NativeTorrent) -> LibraryMetadata? {
         metadataByHash[torrent.hash.lowercased()]
+    }
+
+    func setMetadataLanguage(_ language: AppLanguage) {
+        guard metadataLanguage != language else { return }
+        metadataLanguage = language
+        restartMetadataResolution()
+    }
+
+    func metadataConfigurationChanged() {
+        restartMetadataResolution()
+    }
+
+    private func restartMetadataResolution() {
+        metadataConfigurationRevision += 1
+        metadataResolutionTasks.values.forEach { $0.cancel() }
+        metadataResolutionTasks.removeAll()
+        resolvingMetadataHashes.removeAll()
+        metadataRetryAfter.removeAll()
+        resolveMetadataIfNeeded(for: torrents)
     }
 
     func refresh(selectingHash: String) {
@@ -457,6 +488,9 @@ final class LibraryViewModel: ObservableObject {
             if let refreshed = try? await api.torrent(hash: torrent.hash),
                let index = torrents.firstIndex(where: { $0.id == torrent.id }) {
                 torrents[index] = refreshed
+                resolveMetadata(for: refreshed, forceRefresh: true)
+            } else {
+                resolveMetadata(for: torrent, forceRefresh: true)
             }
         }
     }
@@ -488,6 +522,7 @@ final class LibraryViewModel: ObservableObject {
     private func refreshImmediately(selectingHash: String?) async throws {
         let values = try await api.listTorrents()
         torrents = values
+        resolveMetadataIfNeeded(for: values)
 
         if let selectingHash,
            let selected = values.first(where: { $0.hash == selectingHash }) {
@@ -502,6 +537,116 @@ final class LibraryViewModel: ObservableObject {
             title: "TorrServer",
             message: error.localizedDescription
         )
+    }
+
+    private var selectedMetadataProvider: MetadataProvider {
+        metadataSettings.settings.selectedProvider
+    }
+
+    private var metadataLanguageCode: String {
+        selectedMetadataProvider == .tmdb
+            ? (metadataLanguage == .russian ? "ru-RU" : "en-US")
+            : "en-US"
+    }
+
+    private func resolveMetadataIfNeeded(for values: [NativeTorrent]) {
+        let provider = selectedMetadataProvider
+        guard metadataSettings.isConfigured(provider) else { return }
+        for torrent in values {
+            let hash = torrent.hash.lowercased()
+            guard !hash.isEmpty else { continue }
+            if let metadata = metadataByHash[hash],
+               metadata.metadataProvider == provider,
+               metadata.metadataProviderID != nil,
+               metadata.metadataLanguage == metadataLanguageCode {
+                continue
+            }
+            resolveMetadata(for: torrent)
+        }
+    }
+
+    private func resolveMetadata(
+        for torrent: NativeTorrent,
+        forceRefresh: Bool = false
+    ) {
+        let provider = selectedMetadataProvider
+        guard metadataSettings.isConfigured(provider) else { return }
+        let hash = torrent.hash.lowercased()
+        guard !hash.isEmpty else { return }
+        guard metadataResolutionTasks[hash] == nil else { return }
+        if !forceRefresh,
+           let retryDate = metadataRetryAfter[hash],
+           retryDate > Date() {
+            return
+        }
+
+        let candidates = metadataCandidates(for: torrent)
+        let language = metadataLanguageCode
+        let revision = metadataConfigurationRevision
+        resolvingMetadataHashes.insert(hash)
+        metadataResolutionTasks[hash] = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if metadataConfigurationRevision == revision {
+                    resolvingMetadataHashes.remove(hash)
+                    metadataResolutionTasks[hash] = nil
+                }
+            }
+            let outcome = await metadataResolver.resolve(
+                candidates: candidates,
+                provider: provider,
+                language: language,
+                forceRefresh: forceRefresh
+            )
+            guard !Task.isCancelled, metadataConfigurationRevision == revision else { return }
+
+            switch outcome {
+            case .resolved(let resolved):
+                let metadataValue = resolved.metadata
+                let existing = metadataStore.metadata(for: hash) ?? LibraryMetadata(
+                    title: torrent.displayTitle,
+                    posterURL: torrent.poster,
+                    summary: "",
+                    source: metadataValue.provider.displayName,
+                    sourceURL: metadataValue.provider.sourceURL(
+                        id: metadataValue.id,
+                        kind: metadataValue.kind
+                    )?.absoluteString
+                )
+                let metadata = existing.merging(
+                    resolved: resolved,
+                    language: language
+                )
+                metadataStore.save(metadata, for: hash)
+                metadataByHash[hash] = metadata
+                metadataRetryAfter[hash] = nil
+
+            case .notFound:
+                metadataRetryAfter[hash] = Date().addingTimeInterval(60 * 60 * 24)
+
+            case .unavailable:
+                metadataRetryAfter[hash] = Date().addingTimeInterval(60 * 15)
+            }
+        }
+    }
+
+    private func metadataCandidates(for torrent: NativeTorrent) -> [String] {
+        var values: [String] = []
+        if let largestPlayableFile = torrent.playableFiles.max(by: { $0.length < $1.length }) {
+            values.append(largestPlayableFile.displayName)
+        }
+        values.append(torrent.displayTitle)
+        if let name = torrent.name, !name.isEmpty {
+            values.append(name)
+        }
+
+        var seen: Set<String> = []
+        return values.filter { value in
+            let normalized = value.lowercased()
+            guard !normalized.isEmpty, !seen.contains(normalized) else { return false }
+            seen.insert(normalized)
+            return true
+        }
     }
 }
 

@@ -110,7 +110,7 @@ codesign --verify --deep --strict "$SIGNED_APP_PATH"
 
 rm -rf "$APP_PATH"
 ditto --norsrc "$SIGNED_APP_PATH" "$APP_PATH"
-xattr -d com.apple.FinderInfo "$APP_PATH" 2>/dev/null || true
-xattr -d 'com.apple.fileprovider.fpfs#P' "$APP_PATH" 2>/dev/null || true
+xattr -cr "$APP_PATH" 2>/dev/null || true
+codesign --verify --deep --strict "$APP_PATH"
 
 echo "$APP_PATH"

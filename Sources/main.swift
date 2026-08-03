@@ -130,6 +130,18 @@ struct Texts {
     var jackettSearch: String {
         language == .russian ? "Поиск" : "Search"
     }
+    var metadataProvider: String {
+        language == .russian ? "Источник метаданных" : "Metadata source"
+    }
+    var metadataAPIKey: String {
+        "API Key"
+    }
+    var metadataConfigure: String {
+        language == .russian ? "Настроить" : "Configure"
+    }
+    var metadataConfigured: String {
+        language == .russian ? "Подключено" : "Connected"
+    }
     var speedFormat: String {
         language == .russian ? "Формат скорости" : "Speed format"
     }
@@ -1167,6 +1179,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private let libraryClient = TorrServerLibraryClient()
     private let notificationController = NotificationController()
     private let diagnosticsService = TorrServerDiagnosticsService()
+    private let metadataSettings = MetadataSettingsStore.shared
     private let mainWindowModel = MainWindowModel()
     private let libraryModel = LibraryViewModel()
     private let searchModel = SearchViewModel()
@@ -1442,6 +1455,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
     }
 
+    private func setMetadataProvider(_ provider: MetadataProvider) {
+        do {
+            try metadataSettings.save(selectedProvider: provider)
+            mainWindowModel.metadataProvider = provider
+            libraryModel.metadataConfigurationChanged()
+        } catch {
+            showAlert(title: "Metadata", message: error.localizedDescription)
+            mainWindowModel.metadataProvider = metadataSettings.settings.selectedProvider
+        }
+    }
+
+    private func setMetadataAPIKey(_ value: String, provider: MetadataProvider) {
+        do {
+            try metadataSettings.save(apiKey: value, for: provider)
+            let settings = metadataSettings.settings
+            mainWindowModel.tmdbAPIKey = settings.tmdbAPIKey
+            mainWindowModel.omdbAPIKey = settings.omdbAPIKey
+            libraryModel.metadataConfigurationChanged()
+        } catch {
+            showAlert(title: provider.displayName, message: error.localizedDescription)
+            let settings = metadataSettings.settings
+            mainWindowModel.tmdbAPIKey = settings.tmdbAPIKey
+            mainWindowModel.omdbAPIKey = settings.omdbAPIKey
+        }
+    }
+
     @objc private func showAboutPanel(_ sender: Any?) {
         let version = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"
@@ -1551,6 +1590,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         mainWindowModel.jackettEnabled = UserDefaults.standard.bool(
             forKey: jackettSearchEnabledKey
         )
+        let metadataProviderSettings = metadataSettings.settings
+        mainWindowModel.metadataProvider = metadataProviderSettings.selectedProvider
+        mainWindowModel.tmdbAPIKey = metadataProviderSettings.tmdbAPIKey
+        mainWindowModel.omdbAPIKey = metadataProviderSettings.omdbAPIKey
         mainWindowModel.onPathChanged = { [weak self] _ in
             guard let self else { return }
             self.saveCurrentPath()
@@ -1581,6 +1624,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
         mainWindowModel.onJackettEnabledChanged = { [weak self] enabled in
             self?.setJackettEnabled(enabled)
+        }
+        mainWindowModel.onMetadataProviderChanged = { [weak self] provider in
+            self?.setMetadataProvider(provider)
+        }
+        mainWindowModel.onMetadataAPIKeyChanged = { [weak self] provider, value in
+            self?.setMetadataAPIKey(value, provider: provider)
         }
         mainWindowModel.onSpeedUnitChanged = { [weak self] unit in
             self?.setSpeedDisplayUnit(unit)
@@ -1987,6 +2036,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         window?.title = texts.title
         mainWindowModel.language = language
         popoverModel.language = language
+        libraryModel.setMetadataLanguage(language)
         updateUI(for: processController.state)
         refreshSpeedDisplay()
     }

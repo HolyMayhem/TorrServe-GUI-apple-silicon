@@ -128,6 +128,7 @@ struct LibraryView: View {
                         ForEach(model.filteredTorrents) { torrent in
                             TorrentLibraryRow(
                                 torrent: torrent,
+                                metadata: model.metadata(for: torrent),
                                 language: mainModel.language,
                                 isSelected: model.selectedTorrentID == torrent.id
                             ) {
@@ -559,13 +560,22 @@ private struct TorrentPosterCard: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
-            Text(torrent.displayTitle)
+            Text(metadata?.displayTitle ?? torrent.displayTitle)
                 .font(.system(size: 12.5, weight: .semibold))
                 .lineLimit(2)
 
-            Text(LibraryFormat.fileSize(torrent.torrentSize))
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            HStack {
+                Text(LibraryFormat.fileSize(torrent.torrentSize))
+                Spacer()
+                if let year = metadata?.releaseDate?.prefix(4), !year.isEmpty {
+                    Text(String(year))
+                }
+                if let rating = metadata?.rating, rating > 0 {
+                    Label(String(format: "%.1f", rating), systemImage: "star.fill")
+                }
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
         }
         .padding(9)
         .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 16))
@@ -588,7 +598,7 @@ private struct TorrentLargeCard: View {
 
             VStack(alignment: .leading, spacing: 9) {
                 HStack(alignment: .top) {
-                    Text(torrent.displayTitle)
+                    Text(metadata?.displayTitle ?? torrent.displayTitle)
                         .font(.title3.weight(.semibold))
                         .lineLimit(2)
                     Spacer()
@@ -606,6 +616,22 @@ private struct TorrentLargeCard: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(4)
+                }
+
+                if let metadata {
+                    HStack(spacing: 7) {
+                        if let releaseDate = metadata.releaseDate, !releaseDate.isEmpty {
+                            Text(releaseDate)
+                        }
+                        if let runtime = metadata.runtimeMinutes, runtime > 0 {
+                            Text("\(runtime) min")
+                        }
+                        if let rating = metadata.rating, rating > 0 {
+                            Label(String(format: "%.1f", rating), systemImage: "star.fill")
+                        }
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
                 }
 
                 HStack(spacing: 8) {
@@ -644,7 +670,31 @@ private struct TorrentLargeCard: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, minHeight: 190, alignment: .leading)
-        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 18))
+        .background {
+            let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+            ZStack {
+                Color.secondary.opacity(0.07)
+                if let value = metadata?.backdropURL,
+                   let url = URL(string: value),
+                   !value.isEmpty {
+                    CachedRemoteImage(
+                        url: url,
+                        contentMode: .fill,
+                        placeholderSystemImage: "photo"
+                    )
+                    .opacity(0.14)
+                    LinearGradient(
+                        colors: [
+                            Color(nsColor: .windowBackgroundColor).opacity(0.35),
+                            Color(nsColor: .windowBackgroundColor).opacity(0.82)
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                }
+            }
+            .clipShape(shape)
+        }
     }
 }
 
@@ -653,27 +703,19 @@ private struct LibraryPoster: View {
     let metadata: LibraryMetadata?
 
     var body: some View {
-        let value = torrent.poster.isEmpty ? (metadata?.posterURL ?? "") : torrent.poster
-        ZStack {
-            Color.secondary.opacity(0.12)
-            if let url = URL(string: value), !value.isEmpty {
-                AsyncImage(url: url) { image in
-                    image.resizable().scaledToFill()
-                } placeholder: {
-                    ProgressView().controlSize(.small)
-                }
-            } else {
-                Image(systemName: "film")
-                    .font(.system(size: 34, weight: .light))
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .clipped()
+        let metadataPoster = metadata?.posterURL ?? ""
+        let value = metadataPoster.isEmpty ? torrent.poster : metadataPoster
+        CachedRemoteImage(
+            url: value.isEmpty ? nil : URL(string: value),
+            contentMode: .fill,
+            placeholderSystemImage: "film"
+        )
     }
 }
 
 private struct TorrentLibraryRow: View {
     let torrent: NativeTorrent
+    let metadata: LibraryMetadata?
     let language: AppLanguage
     let isSelected: Bool
     let action: () -> Void
@@ -686,19 +728,25 @@ private struct TorrentLibraryRow: View {
         Button(action: action) {
             HStack(spacing: 10) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(
-                            torrent.isActive
-                                ? Color.green.opacity(0.18)
-                                : Color.secondary.opacity(0.12)
-                        )
+                    let posterValue = metadata?.posterURL ?? ""
+                    CachedRemoteImage(
+                        url: posterValue.isEmpty ? nil : URL(string: posterValue),
+                        contentMode: .fill,
+                        placeholderSystemImage: "film"
+                    )
                         .frame(width: 40, height: 40)
-                    Image(systemName: torrent.isActive ? "play.fill" : "film")
-                        .foregroundStyle(torrent.isActive ? Color.green : .secondary)
+                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    if torrent.isActive {
+                        Image(systemName: "play.fill")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(6)
+                            .background(Color.green.opacity(0.84), in: Circle())
+                    }
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(torrent.displayTitle)
+                    Text(metadata?.displayTitle ?? torrent.displayTitle)
                         .font(.system(size: 12.5, weight: .medium))
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
@@ -748,19 +796,43 @@ private struct TorrentDetailView: View {
                 poster
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(torrent.displayTitle)
+                    Text(metadata?.displayTitle ?? torrent.displayTitle)
                         .font(.system(size: 18, weight: .semibold, design: .rounded))
                         .lineLimit(3)
 
-                    if !torrent.category.isEmpty {
+                    if let originalTitle = metadata?.originalTitle,
+                       !originalTitle.isEmpty,
+                       originalTitle != metadata?.displayTitle {
+                        Text(originalTitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if let metadata {
+                        Text(metadataFacts(metadata).joined(separator: " · "))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        if !metadata.genres.isEmpty {
+                            Text(metadata.genres.joined(separator: " · "))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    } else if !torrent.category.isEmpty {
                         Text(torrent.category)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
 
-                    Text(LibraryFormat.fileSize(torrent.torrentSize))
-                        .font(.caption)
+                    if model.resolvingMetadataHashes.contains(torrent.hash.lowercased()) {
+                        HStack(spacing: 5) {
+                            ProgressView().controlSize(.mini)
+                            Text(texts.metadataProviderLoading)
+                        }
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
+                    }
 
                     if let summary = metadata?.summary, !summary.isEmpty {
                         Text(summary)
@@ -881,18 +953,11 @@ private struct TorrentDetailView: View {
     @ViewBuilder
     private var poster: some View {
         let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
-        let posterValue = torrent.poster.isEmpty
-            ? (metadata?.posterURL ?? "")
-            : torrent.poster
+        let metadataPoster = metadata?.posterURL ?? ""
+        let posterValue = metadataPoster.isEmpty ? torrent.poster : metadataPoster
 
         if let url = URL(string: posterValue), !posterValue.isEmpty {
-            AsyncImage(url: url) { image in
-                image
-                    .resizable()
-                    .scaledToFill()
-            } placeholder: {
-                posterPlaceholder
-            }
+            CachedRemoteImage(url: url, contentMode: .fill, placeholderSystemImage: "film")
             .frame(width: 72, height: 96)
             .clipShape(shape)
         } else {
@@ -925,6 +990,7 @@ private struct TorrentDetailView: View {
                 LibraryFormat.speed(torrent.downloadSpeed),
                 systemImage: "arrow.down.circle.fill"
             )
+            metadataStatusBadge
             Spacer()
             Text(texts.status(for: torrent))
                 .font(.caption)
@@ -932,10 +998,88 @@ private struct TorrentDetailView: View {
         }
     }
 
+    private func metadataFacts(_ metadata: LibraryMetadata) -> [String] {
+        var values: [String] = []
+        if let kind = metadata.mediaKind {
+            values.append(kind == .movie
+                ? (language == .russian ? "Фильм" : "Movie")
+                : (language == .russian ? "Сериал" : "TV"))
+        }
+        if let releaseDate = metadata.releaseDate, !releaseDate.isEmpty {
+            values.append(releaseDate)
+        }
+        if let season = metadata.season {
+            if let episode = metadata.episode {
+                values.append(String(format: "S%02dE%02d", season, episode))
+            } else {
+                values.append(String(format: "S%02d", season))
+            }
+        }
+        if let runtime = metadata.runtimeMinutes, runtime > 0 {
+            values.append(language == .russian ? "\(runtime) мин" : "\(runtime) min")
+        }
+        if let rating = metadata.rating, rating > 0 {
+            values.append("★ \(String(format: "%.1f", rating))")
+        }
+        return values
+    }
+
     private func statBadge(_ title: String, systemImage: String) -> some View {
         Label(title, systemImage: systemImage)
             .font(.caption)
             .monospacedDigit()
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(.regularMaterial, in: Capsule())
+    }
+
+    @ViewBuilder
+    private var metadataStatusBadge: some View {
+        let hash = torrent.hash.lowercased()
+
+        if model.resolvingMetadataHashes.contains(hash) {
+            Label(
+                "\(texts.metadataIndicator): \(texts.metadataIndicatorLoading)",
+                systemImage: "hourglass"
+            )
+            .foregroundStyle(.orange)
+            .help(texts.metadataIndicatorLoadingHint)
+            .metadataBadgeStyle()
+        } else if let source = metadataSourceName {
+            Label(
+                "\(texts.metadataIndicator): \(source)",
+                systemImage: "checkmark.seal.fill"
+            )
+            .foregroundStyle(.green)
+            .help(texts.metadataIndicatorLoadedHint(source))
+            .metadataBadgeStyle()
+        } else {
+            Label(
+                "\(texts.metadataIndicator): \(texts.metadataIndicatorMissing)",
+                systemImage: "questionmark.circle"
+            )
+            .foregroundStyle(.secondary)
+            .help(texts.metadataIndicatorMissingHint)
+            .metadataBadgeStyle()
+        }
+    }
+
+    private var metadataSourceName: String? {
+        if let provider = metadata?.metadataProvider {
+            return provider.displayName
+        }
+        guard let source = metadata?.source.trimmingCharacters(in: .whitespacesAndNewlines),
+              !source.isEmpty else {
+            return nil
+        }
+        return source
+    }
+}
+
+private extension View {
+    func metadataBadgeStyle() -> some View {
+        font(.caption)
+            .lineLimit(1)
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .background(.regularMaterial, in: Capsule())
@@ -1080,6 +1224,33 @@ private struct LibraryTexts {
     }
     var metadataLoading: String {
         language == .russian ? "Получение метаданных torrent…" : "Fetching torrent metadata…"
+    }
+    var metadataProviderLoading: String {
+        language == .russian ? "Получение метаданных…" : "Fetching metadata…"
+    }
+    var metadataIndicator: String {
+        language == .russian ? "Метаданные" : "Metadata"
+    }
+    var metadataIndicatorLoading: String {
+        language == .russian ? "загрузка" : "loading"
+    }
+    var metadataIndicatorMissing: String {
+        language == .russian ? "нет" : "none"
+    }
+    var metadataIndicatorLoadingHint: String {
+        language == .russian
+            ? "Приложение сейчас ищет метаданные для этого материала."
+            : "The app is currently looking up metadata for this item."
+    }
+    var metadataIndicatorMissingHint: String {
+        language == .russian
+            ? "Метаданные ещё не получены или материал не найден выбранным сервисом."
+            : "Metadata has not been fetched yet or the selected service could not find this item."
+    }
+    func metadataIndicatorLoadedHint(_ provider: String) -> String {
+        language == .russian
+            ? "Метаданные успешно получены из \(provider)."
+            : "Metadata was successfully loaded from \(provider)."
     }
     var seeds: String { language == .russian ? "Сиды" : "Seeds" }
     var peers: String { language == .russian ? "Пиры" : "Peers" }

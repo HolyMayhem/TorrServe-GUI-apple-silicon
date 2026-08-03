@@ -42,6 +42,9 @@ final class MainWindowModel: ObservableObject {
     @Published var notificationsEnabled = false
     @Published var notificationsAuthorizationPending = false
     @Published var jackettEnabled = true
+    @Published var metadataProvider = MetadataProvider.tmdb
+    @Published var tmdbAPIKey = ""
+    @Published var omdbAPIKey = ""
     @Published var speedUnit: SpeedDisplayUnit = .automatic
     @Published var selectedSection: AppSection = .server
     @Published var detectedPlayers: [DetectedPlayer] = []
@@ -70,6 +73,8 @@ final class MainWindowModel: ObservableObject {
     var onHideDockIconChanged: ((Bool) -> Void)?
     var onNotificationsChanged: ((Bool) -> Void)?
     var onJackettEnabledChanged: ((Bool) -> Void)?
+    var onMetadataProviderChanged: ((MetadataProvider) -> Void)?
+    var onMetadataAPIKeyChanged: ((MetadataProvider, String) -> Void)?
     var onSpeedUnitChanged: ((SpeedDisplayUnit) -> Void)?
     var onLanguageChanged: ((AppLanguage) -> Void)?
     var onSectionChanged: ((AppSection) -> Void)?
@@ -92,6 +97,7 @@ struct MainWindowView: View {
     @ObservedObject var model: MainWindowModel
     @State private var showsClearCacheConfirmation = false
     @State private var showsDiagnostics = false
+    @State private var showsMetadataSettings = false
 
     private var texts: Texts {
         Texts(language: model.language)
@@ -111,6 +117,25 @@ struct MainWindowView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .sheet(isPresented: $showsMetadataSettings) {
+            MetadataSettingsSheet(
+                language: model.language,
+                provider: model.metadataProvider,
+                initialAPIKey: model.metadataProvider == .tmdb
+                    ? model.tmdbAPIKey
+                    : model.omdbAPIKey,
+                save: { value in
+                    if model.metadataProvider == .tmdb {
+                        model.tmdbAPIKey = value
+                    } else {
+                        model.omdbAPIKey = value
+                    }
+                    model.onMetadataAPIKeyChanged?(model.metadataProvider, value)
+                    showsMetadataSettings = false
+                },
+                cancel: { showsMetadataSettings = false }
+            )
+        }
     }
 
     private var executableSection: some View {
@@ -275,6 +300,45 @@ struct MainWindowView: View {
                             isEnabled: model.jackettEnabled,
                             onChange: { model.onJackettEnabledChanged?($0) }
                         )
+                    }
+                    .frame(height: 29)
+
+                    HStack {
+                        Label(texts.metadataProvider, systemImage: "photo.on.rectangle.angled")
+                            .font(.system(size: 13, weight: .medium))
+
+                        Spacer()
+
+                        GlassMetadataProviderPicker(
+                            provider: model.metadataProvider,
+                            onChange: { model.onMetadataProviderChanged?($0) }
+                        )
+                    }
+                    .frame(height: 29)
+
+                    HStack {
+                        Label(texts.metadataAPIKey, systemImage: "key")
+                            .font(.system(size: 13, weight: .medium))
+
+                        Spacer()
+
+                        Button {
+                            showsMetadataSettings = true
+                        } label: {
+                            let apiKey = model.metadataProvider == .tmdb
+                                ? model.tmdbAPIKey
+                                : model.omdbAPIKey
+                            Label(
+                                apiKey.isEmpty
+                                    ? texts.metadataConfigure
+                                    : texts.metadataConfigured,
+                                systemImage: apiKey.isEmpty
+                                    ? "key"
+                                    : "checkmark.circle.fill"
+                            )
+                            .font(.system(size: 11.5, weight: .medium))
+                        }
+                        .buttonStyle(.borderless)
                     }
                     .frame(height: 29)
 
@@ -480,6 +544,90 @@ struct MainWindowView: View {
         case .warning: return "exclamationmark.triangle.fill"
         case .failure: return "xmark.circle.fill"
         case .idle: return fallback
+        }
+    }
+}
+
+private struct MetadataSettingsSheet: View {
+    let language: AppLanguage
+    let provider: MetadataProvider
+    let save: (String) -> Void
+    let cancel: () -> Void
+
+    @State private var apiKey: String
+
+    init(
+        language: AppLanguage,
+        provider: MetadataProvider,
+        initialAPIKey: String,
+        save: @escaping (String) -> Void,
+        cancel: @escaping () -> Void
+    ) {
+        self.language = language
+        self.provider = provider
+        self.save = save
+        self.cancel = cancel
+        _apiKey = State(initialValue: initialAPIKey)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Label(
+                language == .russian
+                    ? "Метаданные \(provider.displayName)"
+                    : "\(provider.displayName) Metadata",
+                systemImage: "photo.on.rectangle.angled"
+            )
+            .font(.title3.weight(.semibold))
+
+            Text(language == .russian
+                ? "Укажите API Key для \(provider.displayName). Ключ хранится локально и используется только для запросов метаданных."
+                : "Enter the \(provider.displayName) API Key. It is stored locally and used only for metadata requests.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            SecureField("\(provider.displayName) API Key", text: $apiKey)
+                .textFieldStyle(.roundedBorder)
+
+            Text(attribution)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            HStack {
+                Link(
+                    language == .russian ? "Получить API Key" : "Get an API Key",
+                    destination: provider == .tmdb
+                        ? URL(string: "https://www.themoviedb.org/settings/api")!
+                        : URL(string: "https://www.omdbapi.com/apikey.aspx")!
+                )
+
+                Spacer()
+
+                Button(language == .russian ? "Отмена" : "Cancel", action: cancel)
+                    .keyboardShortcut(.cancelAction)
+
+                Button(language == .russian ? "Сохранить" : "Save") {
+                    save(apiKey.trimmingCharacters(in: .whitespacesAndNewlines))
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(22)
+        .frame(width: 480)
+    }
+
+    private var attribution: String {
+        switch provider {
+        case .tmdb:
+            return language == .russian
+                ? "Этот продукт использует TMDB API, но не одобрен и не сертифицирован TMDB."
+                : "This product uses the TMDB API but is not endorsed or certified by TMDB."
+        case .omdb:
+            return language == .russian
+                ? "OMDb предоставляет постеры и данные IMDb, но не поддерживает локализацию и фоновые изображения."
+                : "OMDb provides posters and IMDb data, but does not provide localization or backdrop images."
         }
     }
 }
@@ -1067,6 +1215,72 @@ private struct GlassJackettPicker: View {
         Text(title)
             .font(.system(size: 11.5, weight: selected ? .semibold : .regular))
             .foregroundStyle(selected ? Color.white : Color.secondary)
+            .frame(maxWidth: .infinity)
+    }
+}
+
+private struct GlassMetadataProviderPicker: View {
+    let provider: MetadataProvider
+    let onChange: (MetadataProvider) -> Void
+
+    var body: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.24)) {
+                onChange(provider == .tmdb ? .omdb : .tmdb)
+            }
+        } label: {
+            ZStack(alignment: provider == .tmdb ? .leading : .trailing) {
+                providerTrack
+
+                providerThumb
+                    .padding(3)
+
+                HStack(spacing: 0) {
+                    optionLabel("TMDB", value: .tmdb)
+                    optionLabel("OMDb", value: .omdb)
+                }
+            }
+            .frame(width: 230, height: 28)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Metadata provider")
+        .accessibilityValue(provider.displayName)
+    }
+
+    @ViewBuilder
+    private var providerTrack: some View {
+        if #available(macOS 26.0, *) {
+            Capsule()
+                .fill(Color.secondary.opacity(0.10))
+                .glassEffect(.regular.interactive(), in: Capsule())
+        } else {
+            Capsule()
+                .fill(Color.secondary.opacity(0.18))
+                .overlay(Capsule().stroke(.white.opacity(0.12), lineWidth: 0.5))
+        }
+    }
+
+    @ViewBuilder
+    private var providerThumb: some View {
+        let thumb = Capsule()
+            .fill(Color.accentColor.opacity(0.72))
+            .frame(width: 112, height: 22)
+
+        if #available(macOS 26.0, *) {
+            thumb.glassEffect(
+                .regular.tint(Color.accentColor.opacity(0.45)).interactive(),
+                in: Capsule()
+            )
+        } else {
+            thumb.shadow(color: .black.opacity(0.18), radius: 2, y: 1)
+        }
+    }
+
+    private func optionLabel(_ title: String, value: MetadataProvider) -> some View {
+        Text(title)
+            .font(.system(size: 11.5, weight: provider == value ? .semibold : .regular))
+            .foregroundStyle(provider == value ? Color.white : Color.secondary)
             .frame(maxWidth: .infinity)
     }
 }
