@@ -104,6 +104,7 @@ final class MetadataSettingsStoreTests: XCTestCase {
         try store.save(apiKey: "tmdb-key", for: .tmdb)
         try store.save(apiKey: "omdb-key", for: .omdb)
         try store.save(selectedProvider: .omdb)
+        try store.save(overviewTranslationMode: .original)
 
         let reloaded = MetadataSettingsStore(
             fileURL: fileURL,
@@ -112,6 +113,79 @@ final class MetadataSettingsStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.selectedProvider, .omdb)
         XCTAssertEqual(reloaded.tmdbAPIKey, "tmdb-key")
         XCTAssertEqual(reloaded.omdbAPIKey, "omdb-key")
+        XCTAssertEqual(reloaded.overviewTranslationMode, .original)
+    }
+
+    func testDefaultsTranslationToAutomaticForExistingSettingsFile() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fileURL = directory.appendingPathComponent("metadata.json")
+        try Data(#"{"selectedProvider":"omdb","tmdbAPIKey":"","omdbAPIKey":"key"}"#.utf8)
+            .write(to: fileURL)
+
+        let settings = MetadataSettingsStore(
+            fileURL: fileURL,
+            legacyTMDBURL: directory.appendingPathComponent("legacy.json")
+        ).settings
+
+        XCTAssertEqual(settings.overviewTranslationMode, .automatic)
+    }
+}
+
+final class OverviewTranslationTests: XCTestCase {
+    func testTranslationPolicyOnlyUsesEnglishOMDBOverviewInRussianAutomaticMode() {
+        XCTAssertTrue(OverviewTranslationPolicy.shouldTranslate(
+            "A criminal returns to the city for one final job.",
+            provider: .omdb,
+            language: .russian,
+            mode: .automatic
+        ))
+        XCTAssertFalse(OverviewTranslationPolicy.shouldTranslate(
+            "Преступник возвращается в город.",
+            provider: .omdb,
+            language: .russian,
+            mode: .automatic
+        ))
+        XCTAssertFalse(OverviewTranslationPolicy.shouldTranslate(
+            "A criminal returns to the city.",
+            provider: .tmdb,
+            language: .russian,
+            mode: .automatic
+        ))
+        XCTAssertFalse(OverviewTranslationPolicy.shouldTranslate(
+            "A criminal returns to the city.",
+            provider: .omdb,
+            language: .russian,
+            mode: .original
+        ))
+    }
+
+    func testTranslationCachePersistsByMediaAndSourceText() async {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("translations.json")
+        let source = "An English overview."
+        let cache = OverviewTranslationCache(fileURL: fileURL)
+
+        await cache.save(
+            "Описание на русском.",
+            provider: .omdb,
+            mediaID: "tt123",
+            sourceText: source,
+            targetLanguage: "ru"
+        )
+
+        let reloaded = OverviewTranslationCache(fileURL: fileURL)
+        let value = await reloaded.value(
+            provider: .omdb,
+            mediaID: "tt123",
+            sourceText: source,
+            targetLanguage: "ru"
+        )
+        XCTAssertEqual(value, "Описание на русском.")
     }
 }
 

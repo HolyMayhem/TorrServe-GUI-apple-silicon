@@ -261,6 +261,7 @@ struct LibraryView: View {
                                     torrent: torrent,
                                     metadata: model.metadata(for: torrent),
                                     language: mainModel.language,
+                                    translationMode: mainModel.overviewTranslationMode,
                                     play: {
                                         model.playFirstFile(
                                             in: torrent,
@@ -292,7 +293,8 @@ struct LibraryView: View {
                 torrent: torrent,
                 model: model,
                 metadata: model.metadata(for: torrent),
-                language: mainModel.language
+                language: mainModel.language,
+                translationMode: mainModel.overviewTranslationMode
             )
             .padding(14)
             .libraryPanel()
@@ -586,6 +588,7 @@ private struct TorrentLargeCard: View {
     let torrent: NativeTorrent
     let metadata: LibraryMetadata?
     let language: AppLanguage
+    let translationMode: OverviewTranslationMode
     let play: () -> Void
 
     private var texts: LibraryTexts { LibraryTexts(language: language) }
@@ -612,10 +615,14 @@ private struct TorrentLargeCard: View {
                 }
 
                 if let summary = metadata?.summary, !summary.isEmpty {
-                    Text(summary)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(4)
+                    LocalizedOverviewText(
+                        sourceText: summary,
+                        provider: metadata?.metadataProvider,
+                        mediaID: metadata?.metadataProviderID,
+                        language: language,
+                        translationMode: translationMode,
+                        lineLimit: 4
+                    )
                 }
 
                 if let metadata {
@@ -784,6 +791,7 @@ private struct TorrentDetailView: View {
     @ObservedObject var model: LibraryViewModel
     let metadata: LibraryMetadata?
     let language: AppLanguage
+    let translationMode: OverviewTranslationMode
     @State private var showsDeleteConfirmation = false
 
     private var texts: LibraryTexts {
@@ -835,11 +843,15 @@ private struct TorrentDetailView: View {
                     }
 
                     if let summary = metadata?.summary, !summary.isEmpty {
-                        Text(summary)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(3)
-                            .help(summary)
+                        LocalizedOverviewText(
+                            sourceText: summary,
+                            provider: metadata?.metadataProvider,
+                            mediaID: metadata?.metadataProviderID,
+                            language: language,
+                            translationMode: translationMode,
+                            lineLimit: 3,
+                            expandedMaximumHeight: 180
+                        )
                     }
                 }
 

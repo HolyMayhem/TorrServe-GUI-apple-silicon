@@ -1,5 +1,10 @@
 import Foundation
 
+enum OverviewTranslationMode: String, Codable, CaseIterable, Sendable {
+    case automatic
+    case original
+}
+
 struct TMDBConfiguration: Equatable, Sendable {
     let apiKey: String
     let apiBaseURL: URL
@@ -38,6 +43,7 @@ struct MetadataProviderSettings: Equatable, Sendable {
     var selectedProvider: MetadataProvider
     var tmdbAPIKey: String
     var omdbAPIKey: String
+    var overviewTranslationMode: OverviewTranslationMode
 
     func apiKey(for provider: MetadataProvider) -> String {
         switch provider {
@@ -58,6 +64,7 @@ final class MetadataSettingsStore: TMDBConfigurationProviding, OMDBConfiguration
         var selectedProvider: MetadataProvider
         var tmdbAPIKey: String
         var omdbAPIKey: String
+        var overviewTranslationMode: OverviewTranslationMode?
     }
 
     private struct LegacyTMDBPayload: Codable {
@@ -89,7 +96,8 @@ final class MetadataSettingsStore: TMDBConfigurationProviding, OMDBConfiguration
             return MetadataProviderSettings(
                 selectedProvider: payload.selectedProvider,
                 tmdbAPIKey: payload.tmdbAPIKey,
-                omdbAPIKey: payload.omdbAPIKey
+                omdbAPIKey: payload.omdbAPIKey,
+                overviewTranslationMode: payload.overviewTranslationMode ?? .automatic
             )
         }
     }
@@ -114,6 +122,14 @@ final class MetadataSettingsStore: TMDBConfigurationProviding, OMDBConfiguration
             case .tmdb: payload.tmdbAPIKey = value
             case .omdb: payload.omdbAPIKey = value
             }
+            try persist(payload)
+        }
+    }
+
+    func save(overviewTranslationMode: OverviewTranslationMode) throws {
+        try lock.withLock {
+            var payload = loadPayload()
+            payload.overviewTranslationMode = overviewTranslationMode
             try persist(payload)
         }
     }
@@ -145,7 +161,12 @@ final class MetadataSettingsStore: TMDBConfigurationProviding, OMDBConfiguration
         } else {
             legacyKey = ""
         }
-        return Payload(selectedProvider: .tmdb, tmdbAPIKey: legacyKey, omdbAPIKey: "")
+        return Payload(
+            selectedProvider: .tmdb,
+            tmdbAPIKey: legacyKey,
+            omdbAPIKey: "",
+            overviewTranslationMode: .automatic
+        )
     }
 
     private func persist(_ payload: Payload) throws {

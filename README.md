@@ -15,6 +15,7 @@ You can manage everything directly in the app: add movies using magnet links or
 - Search for torrents through Jackett.
 - Automatically enrich movies and series with posters, descriptions, genres,
   release information, runtime, and ratings from TMDB or OMDb.
+- Translate English OMDb descriptions into Russian with Apple Translation.
 - Play content in IINA, VLC, Infuse, or the default media player.
 - Use a compact menu bar icon to view server status, streaming speed, and active
   transfer statistics, or quickly start and stop TorrServer.
@@ -32,5 +33,5 @@ the app's settings.
 
 ## Requirements
 
-- macOS 12 or later.
+- macOS 15 or later.
 - A Mac with Apple Silicon.

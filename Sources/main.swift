@@ -1481,13 +1481,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
     }
 
+    private func setOverviewTranslationMode(_ mode: OverviewTranslationMode) {
+        do {
+            try metadataSettings.save(overviewTranslationMode: mode)
+            mainWindowModel.overviewTranslationMode = mode
+        } catch {
+            showAlert(title: "Metadata", message: error.localizedDescription)
+            mainWindowModel.overviewTranslationMode = metadataSettings.settings.overviewTranslationMode
+        }
+    }
+
     @objc private func showAboutPanel(_ sender: Any?) {
         let version = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"
-        ) as? String ?? "2.5.1"
+        ) as? String ?? "2.6.5"
         let build = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleVersion"
-        ) as? String ?? "29"
+        ) as? String ?? "35"
         let credits = NSAttributedString(
             string: texts.aboutCredits,
             attributes: [
@@ -1594,6 +1604,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         mainWindowModel.metadataProvider = metadataProviderSettings.selectedProvider
         mainWindowModel.tmdbAPIKey = metadataProviderSettings.tmdbAPIKey
         mainWindowModel.omdbAPIKey = metadataProviderSettings.omdbAPIKey
+        mainWindowModel.overviewTranslationMode = metadataProviderSettings.overviewTranslationMode
         mainWindowModel.onPathChanged = { [weak self] _ in
             guard let self else { return }
             self.saveCurrentPath()
@@ -1630,6 +1641,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
         mainWindowModel.onMetadataAPIKeyChanged = { [weak self] provider, value in
             self?.setMetadataAPIKey(value, provider: provider)
+        }
+        mainWindowModel.onOverviewTranslationModeChanged = { [weak self] mode in
+            self?.setOverviewTranslationMode(mode)
         }
         mainWindowModel.onSpeedUnitChanged = { [weak self] unit in
             self?.setSpeedDisplayUnit(unit)

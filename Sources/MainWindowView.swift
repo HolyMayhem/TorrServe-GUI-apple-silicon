@@ -45,6 +45,7 @@ final class MainWindowModel: ObservableObject {
     @Published var metadataProvider = MetadataProvider.tmdb
     @Published var tmdbAPIKey = ""
     @Published var omdbAPIKey = ""
+    @Published var overviewTranslationMode = OverviewTranslationMode.automatic
     @Published var speedUnit: SpeedDisplayUnit = .automatic
     @Published var selectedSection: AppSection = .server
     @Published var detectedPlayers: [DetectedPlayer] = []
@@ -75,6 +76,7 @@ final class MainWindowModel: ObservableObject {
     var onJackettEnabledChanged: ((Bool) -> Void)?
     var onMetadataProviderChanged: ((MetadataProvider) -> Void)?
     var onMetadataAPIKeyChanged: ((MetadataProvider, String) -> Void)?
+    var onOverviewTranslationModeChanged: ((OverviewTranslationMode) -> Void)?
     var onSpeedUnitChanged: ((SpeedDisplayUnit) -> Void)?
     var onLanguageChanged: ((AppLanguage) -> Void)?
     var onSectionChanged: ((AppSection) -> Void)?
@@ -124,13 +126,18 @@ struct MainWindowView: View {
                 initialAPIKey: model.metadataProvider == .tmdb
                     ? model.tmdbAPIKey
                     : model.omdbAPIKey,
-                save: { value in
+                initialTranslationMode: model.overviewTranslationMode,
+                save: { value, translationMode in
                     if model.metadataProvider == .tmdb {
                         model.tmdbAPIKey = value
                     } else {
                         model.omdbAPIKey = value
                     }
                     model.onMetadataAPIKeyChanged?(model.metadataProvider, value)
+                    if model.overviewTranslationMode != translationMode {
+                        model.overviewTranslationMode = translationMode
+                        model.onOverviewTranslationModeChanged?(translationMode)
+                    }
                     showsMetadataSettings = false
                 },
                 cancel: { showsMetadataSettings = false }
@@ -551,16 +558,18 @@ struct MainWindowView: View {
 private struct MetadataSettingsSheet: View {
     let language: AppLanguage
     let provider: MetadataProvider
-    let save: (String) -> Void
+    let save: (String, OverviewTranslationMode) -> Void
     let cancel: () -> Void
 
     @State private var apiKey: String
+    @State private var translationMode: OverviewTranslationMode
 
     init(
         language: AppLanguage,
         provider: MetadataProvider,
         initialAPIKey: String,
-        save: @escaping (String) -> Void,
+        initialTranslationMode: OverviewTranslationMode,
+        save: @escaping (String, OverviewTranslationMode) -> Void,
         cancel: @escaping () -> Void
     ) {
         self.language = language
@@ -568,6 +577,7 @@ private struct MetadataSettingsSheet: View {
         self.save = save
         self.cancel = cancel
         _apiKey = State(initialValue: initialAPIKey)
+        _translationMode = State(initialValue: initialTranslationMode)
     }
 
     var body: some View {
@@ -590,6 +600,29 @@ private struct MetadataSettingsSheet: View {
             SecureField("\(provider.displayName) API Key", text: $apiKey)
                 .textFieldStyle(.roundedBorder)
 
+            if provider == .omdb {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(language == .russian ? "Перевод описаний" : "Overview translation")
+                        .font(.subheadline.weight(.medium))
+
+                    Picker("", selection: $translationMode) {
+                        Text(language == .russian ? "Автоматически" : "Automatic")
+                            .tag(OverviewTranslationMode.automatic)
+                        Text(language == .russian ? "Оригинал" : "Original")
+                            .tag(OverviewTranslationMode.original)
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+
+                    Text(language == .russian
+                        ? "В русской версии английские описания OMDb переводятся средствами macOS. Оригинал всегда сохраняется."
+                        : "In the Russian interface, English OMDb overviews are translated by macOS. The original is always preserved.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
             Text(attribution)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -608,7 +641,10 @@ private struct MetadataSettingsSheet: View {
                     .keyboardShortcut(.cancelAction)
 
                 Button(language == .russian ? "Сохранить" : "Save") {
-                    save(apiKey.trimmingCharacters(in: .whitespacesAndNewlines))
+                    save(
+                        apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
+                        translationMode
+                    )
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)

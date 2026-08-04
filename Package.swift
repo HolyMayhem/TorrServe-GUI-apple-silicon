@@ -5,7 +5,7 @@ import PackageDescription
 let package = Package(
     name: "TorrServerManager",
     platforms: [
-        .macOS(.v12)
+        .macOS("15.0")
     ],
     products: [
         .executable(

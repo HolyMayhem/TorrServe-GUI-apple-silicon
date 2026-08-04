@@ -80,7 +80,7 @@ chmod 755 "$TORRSERVER_CACHE_PATH"
 DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" "$ACTOOL" \
   --compile "$COMPILED_ICON_DIR" \
   --platform macosx \
-  --minimum-deployment-target 12.0 \
+  --minimum-deployment-target 15.0 \
   --app-icon AppIcon \
   --output-partial-info-plist "$PARTIAL_INFO_PLIST" \
   --warnings \
@@ -111,6 +111,13 @@ codesign --verify --deep --strict "$SIGNED_APP_PATH"
 rm -rf "$APP_PATH"
 ditto --norsrc "$SIGNED_APP_PATH" "$APP_PATH"
 xattr -cr "$APP_PATH" 2>/dev/null || true
-codesign --verify --deep --strict "$APP_PATH"
+
+# Documents may be managed by File Provider, which can immediately attach
+# FinderInfo after the final copy. Verify the same resource-clean representation
+# that the DMG packager receives instead of racing those external attributes.
+VERIFICATION_APP_PATH="$SIGNING_DIR/Verified-$APP_NAME"
+ditto --norsrc "$APP_PATH" "$VERIFICATION_APP_PATH"
+xattr -cr "$VERIFICATION_APP_PATH" 2>/dev/null || true
+codesign --verify --deep --strict "$VERIFICATION_APP_PATH"
 
 echo "$APP_PATH"
