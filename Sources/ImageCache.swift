@@ -59,6 +59,41 @@ actor ImageCache {
         return image
     }
 
+    func previewURL(for url: URL, title: String) async throws -> URL {
+        guard let directoryURL else {
+            throw MetadataServiceError.invalidResponse
+        }
+        let previewDirectory = directoryURL.appendingPathComponent(
+            "QuickLook",
+            isDirectory: true
+        )
+        let digest = SHA256.hash(data: Data(url.absoluteString.utf8))
+            .prefix(6)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        let filename = sanitizedFilename(title)
+        let previewURL = previewDirectory.appendingPathComponent(
+            "\(filename)-\(digest).png"
+        )
+        if fileManager.fileExists(atPath: previewURL.path) {
+            return previewURL
+        }
+
+        let image = try await image(for: url)
+        guard let tiffData = image.tiffRepresentation,
+              let representation = NSBitmapImageRep(data: tiffData),
+              let pngData = representation.representation(using: .png, properties: [:]) else {
+            throw MetadataServiceError.invalidResponse
+        }
+
+        try fileManager.createDirectory(
+            at: previewDirectory,
+            withIntermediateDirectories: true
+        )
+        try pngData.write(to: previewURL, options: .atomic)
+        return previewURL
+    }
+
     private func diskURL(for url: URL) -> URL? {
         guard let directoryURL else { return nil }
         let digest = SHA256.hash(data: Data(url.absoluteString.utf8))
@@ -66,6 +101,18 @@ actor ImageCache {
             .joined()
         let fileExtension = url.pathExtension.isEmpty ? "img" : url.pathExtension
         return directoryURL.appendingPathComponent("\(digest).\(fileExtension)")
+    }
+
+    private func sanitizedFilename(_ value: String) -> String {
+        let cleaned = value
+            .replacingOccurrences(
+                of: #"[^\p{L}\p{N} ._-]+"#,
+                with: " ",
+                options: .regularExpression
+            )
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return String((cleaned.isEmpty ? "Poster" : cleaned).prefix(72))
     }
 }
 

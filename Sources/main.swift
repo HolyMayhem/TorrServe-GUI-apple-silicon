@@ -1494,10 +1494,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     @objc private func showAboutPanel(_ sender: Any?) {
         let version = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"
-        ) as? String ?? "2.6.5"
+        ) as? String ?? "2.6.9"
         let build = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleVersion"
-        ) as? String ?? "35"
+        ) as? String ?? "39"
         let credits = NSAttributedString(
             string: texts.aboutCredits,
             attributes: [

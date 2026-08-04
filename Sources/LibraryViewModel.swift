@@ -125,6 +125,7 @@ struct LibraryAlert: Identifiable {
 final class LibraryViewModel: ObservableObject {
     @Published var torrents: [NativeTorrent] = []
     @Published var selectedTorrentID: String?
+    @Published private(set) var selectedTorrentIDs: Set<String> = []
     @Published var searchText = ""
     @Published var magnetInput = ""
     @Published var isRefreshing = false
@@ -137,7 +138,7 @@ final class LibraryViewModel: ObservableObject {
     @Published var displayMode: LibraryDisplayMode
     @Published var showsPlayerSetup: Bool
     @Published var detectedPlayers: [DetectedPlayer] = []
-    @Published var pendingDeletionTorrentID: String?
+    @Published private(set) var pendingDeletionTorrentIDs: Set<String> = []
     @Published private(set) var metadataByHash: [String: LibraryMetadata] = [:]
     @Published private(set) var resolvingMetadataHashes: Set<String> = []
 
@@ -193,9 +194,12 @@ final class LibraryViewModel: ObservableObject {
         return torrents.first { $0.id == selectedTorrentID }
     }
 
-    var pendingDeletionTorrent: NativeTorrent? {
-        guard let pendingDeletionTorrentID else { return nil }
-        return torrents.first { $0.id == pendingDeletionTorrentID }
+    var selectedTorrents: [NativeTorrent] {
+        torrents.filter { selectedTorrentIDs.contains($0.id) }
+    }
+
+    var pendingDeletionTorrents: [NativeTorrent] {
+        torrents.filter { pendingDeletionTorrentIDs.contains($0.id) }
     }
 
     func startPolling() {
@@ -232,8 +236,14 @@ final class LibraryViewModel: ObservableObject {
                    !values.contains(where: { $0.id == selectedTorrentID }) {
                     self.selectedTorrentID = nil
                 }
+                let availableIDs = Set(values.map(\.id))
+                self.selectedTorrentIDs.formIntersection(availableIDs)
                 if self.selectedTorrentID == nil {
-                    self.selectedTorrentID = values.first?.id
+                    self.selectedTorrentID = self.selectedTorrents.first?.id
+                        ?? values.first?.id
+                }
+                if let selectedTorrentID = self.selectedTorrentID {
+                    self.selectedTorrentIDs.insert(selectedTorrentID)
                 }
             } catch {
                 if !silently {
@@ -243,8 +253,22 @@ final class LibraryViewModel: ObservableObject {
         }
     }
 
-    func select(_ torrent: NativeTorrent) {
-        selectedTorrentID = torrent.id
+    func select(_ torrent: NativeTorrent, extendingSelection: Bool = false) {
+        if extendingSelection {
+            if selectedTorrentIDs.remove(torrent.id) != nil {
+                if selectedTorrentID == torrent.id {
+                    selectedTorrentID = torrents.first {
+                        selectedTorrentIDs.contains($0.id)
+                    }?.id
+                }
+            } else {
+                selectedTorrentIDs.insert(torrent.id)
+                selectedTorrentID = torrent.id
+            }
+        } else {
+            selectedTorrentIDs = [torrent.id]
+            selectedTorrentID = torrent.id
+        }
     }
 
     func setDisplayMode(_ mode: LibraryDisplayMode) {
@@ -280,7 +304,10 @@ final class LibraryViewModel: ObservableObject {
     }
 
     func refresh(selectingHash: String) {
-        selectedTorrentID = selectingHash
+        if let torrent = torrents.first(where: { $0.hash == selectingHash }) {
+            selectedTorrentID = torrent.id
+            selectedTorrentIDs = [torrent.id]
+        }
         refresh(silently: true)
     }
 
@@ -303,6 +330,7 @@ final class LibraryViewModel: ObservableObject {
                 let torrent = try await api.addMagnet(value)
                 magnetInput = ""
                 selectedTorrentID = torrent.id
+                selectedTorrentIDs = [torrent.id]
                 try await refreshImmediately(selectingHash: torrent.hash)
             } catch {
                 showError(error)
@@ -349,20 +377,28 @@ final class LibraryViewModel: ObservableObject {
     }
 
     func removeSelected() {
-        guard let torrent = selectedTorrent else { return }
-        remove(torrent)
+        remove(selectedTorrents)
     }
 
     func remove(_ torrent: NativeTorrent) {
+        remove([torrent])
+    }
+
+    func remove(_ torrents: [NativeTorrent]) {
+        guard !torrents.isEmpty else { return }
         guard !isRemoving else { return }
         isRemoving = true
 
         Task {
             defer { isRemoving = false }
             do {
-                try await api.removeTorrent(hash: torrent.hash)
-                if selectedTorrentID == torrent.id {
-                    selectedTorrentID = nil
+                for torrent in torrents {
+                    try await api.removeTorrent(hash: torrent.hash)
+                    selectedTorrentIDs.remove(torrent.id)
+                }
+                if let selectedTorrentID,
+                   torrents.contains(where: { $0.id == selectedTorrentID }) {
+                    self.selectedTorrentID = nil
                 }
                 try await refreshImmediately(selectingHash: nil)
             } catch {
@@ -372,17 +408,22 @@ final class LibraryViewModel: ObservableObject {
     }
 
     func requestRemoval(of torrent: NativeTorrent) {
-        pendingDeletionTorrentID = torrent.id
+        pendingDeletionTorrentIDs = [torrent.id]
+    }
+
+    func requestRemovalOfSelection() {
+        guard !selectedTorrentIDs.isEmpty else { return }
+        pendingDeletionTorrentIDs = selectedTorrentIDs
     }
 
     func cancelRemoval() {
-        pendingDeletionTorrentID = nil
+        pendingDeletionTorrentIDs = []
     }
 
     func confirmRemoval() {
-        guard let torrent = pendingDeletionTorrent else { return }
-        pendingDeletionTorrentID = nil
-        remove(torrent)
+        let torrents = pendingDeletionTorrents
+        pendingDeletionTorrentIDs = []
+        remove(torrents)
     }
 
     func play(
@@ -400,6 +441,16 @@ final class LibraryViewModel: ObservableObject {
     ) {
         guard let file = torrent.playableFiles.first else { return }
         play(torrent: torrent, file: file, using: choice ?? playerChoice, language: language)
+    }
+
+    @discardableResult
+    func playSelectedFirstFile(language: AppLanguage) -> Bool {
+        guard let torrent = selectedTorrent,
+              !torrent.playableFiles.isEmpty else {
+            return false
+        }
+        playFirstFile(in: torrent, language: language)
+        return true
     }
 
     func play(
@@ -527,8 +578,16 @@ final class LibraryViewModel: ObservableObject {
         if let selectingHash,
            let selected = values.first(where: { $0.hash == selectingHash }) {
             selectedTorrentID = selected.id
+            selectedTorrentIDs = [selected.id]
         } else if selectedTorrentID == nil {
             selectedTorrentID = values.first?.id
+            selectedTorrentIDs = values.first.map { [$0.id] } ?? []
+        } else {
+            let availableIDs = Set(values.map(\.id))
+            selectedTorrentIDs.formIntersection(availableIDs)
+            if let selectedTorrentID {
+                selectedTorrentIDs.insert(selectedTorrentID)
+            }
         }
     }
 

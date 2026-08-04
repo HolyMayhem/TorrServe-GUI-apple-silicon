@@ -13,27 +13,20 @@ struct LibraryView: View {
     }
 
     var body: some View {
-        ZStack {
-            libraryContent
-
-            if let torrent = model.pendingDeletionTorrent {
-                Color.black.opacity(0.18)
-                    .ignoresSafeArea()
-                    .onTapGesture { model.cancelRemoval() }
-
-                DeleteConfirmationPopover(
-                    title: torrent.displayTitle,
-                    texts: texts,
-                    isRemoving: model.isRemoving,
-                    cancel: { model.cancelRemoval() },
-                    confirm: { model.confirmRemoval() }
-                )
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-                .shadow(color: .black.opacity(0.28), radius: 18, y: 8)
-                .transition(.scale(scale: 0.94).combined(with: .opacity))
+        libraryContent
+        .alert(
+            texts.removeMaterialQuestion(count: model.pendingDeletionTorrents.count),
+            isPresented: deletionAlertIsPresented
+        ) {
+            Button(texts.cancel, role: .cancel) {
+                model.cancelRemoval()
             }
+            Button(texts.remove, role: .destructive) {
+                model.confirmRemoval()
+            }
+        } message: {
+            Text(deletionAlertMessage)
         }
-        .animation(.easeOut(duration: 0.16), value: model.pendingDeletionTorrentID)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $showsMagnetSheet) {
             magnetSheet
@@ -56,6 +49,32 @@ struct LibraryView: View {
             isTargeted: $model.isDropTargeted,
             perform: handleDrop
         )
+        .background {
+            LibraryKeyboardShortcutMonitor(
+                onDelete: handleDeleteKey,
+                onReturn: handleReturnKey
+            )
+            .frame(width: 0, height: 0)
+        }
+    }
+
+    private var deletionAlertIsPresented: Binding<Bool> {
+        Binding(
+            get: { !model.pendingDeletionTorrents.isEmpty },
+            set: { isPresented in
+                if !isPresented {
+                    model.cancelRemoval()
+                }
+            }
+        )
+    }
+
+    private var deletionAlertMessage: String {
+        let torrents = model.pendingDeletionTorrents
+        let subject = torrents.count > 1
+            ? texts.selectedMaterialCount(torrents.count)
+            : (torrents.first?.displayTitle ?? "")
+        return "\(subject)\n\n\(texts.removeMaterialHint(count: torrents.count))"
     }
 
     private var libraryContent: some View {
@@ -130,9 +149,9 @@ struct LibraryView: View {
                                 torrent: torrent,
                                 metadata: model.metadata(for: torrent),
                                 language: mainModel.language,
-                                isSelected: model.selectedTorrentID == torrent.id
+                                isSelected: model.selectedTorrentIDs.contains(torrent.id)
                             ) {
-                                model.select(torrent)
+                                select(torrent)
                             }
                             .contextMenu {
                                 TorrentContextMenu(
@@ -237,6 +256,8 @@ struct LibraryView: View {
                                     torrent: torrent,
                                     metadata: model.metadata(for: torrent),
                                     language: mainModel.language,
+                                    isSelected: model.selectedTorrentIDs.contains(torrent.id),
+                                    select: { select(torrent) },
                                     play: {
                                         model.playFirstFile(
                                             in: torrent,
@@ -262,6 +283,8 @@ struct LibraryView: View {
                                     metadata: model.metadata(for: torrent),
                                     language: mainModel.language,
                                     translationMode: mainModel.overviewTranslationMode,
+                                    isSelected: model.selectedTorrentIDs.contains(torrent.id),
+                                    select: { select(torrent) },
                                     play: {
                                         model.playFirstFile(
                                             in: torrent,
@@ -416,6 +439,108 @@ struct LibraryView: View {
         }
         return accepted
     }
+
+    private func select(_ torrent: NativeTorrent) {
+        model.select(
+            torrent,
+            extendingSelection: NSEvent.modifierFlags.contains(.command)
+        )
+    }
+
+    private func handleDeleteKey() -> Bool {
+        guard !showsMagnetSheet,
+              model.pendingDeletionTorrents.isEmpty,
+              !model.selectedTorrents.isEmpty else {
+            return false
+        }
+        model.requestRemovalOfSelection()
+        return true
+    }
+
+    private func handleReturnKey() -> Bool {
+        guard !showsMagnetSheet,
+              model.pendingDeletionTorrents.isEmpty else {
+            return false
+        }
+        return model.playSelectedFirstFile(language: mainModel.language)
+    }
+}
+
+private struct LibraryKeyboardShortcutMonitor: NSViewRepresentable {
+    let onDelete: () -> Bool
+    let onReturn: () -> Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onDelete: onDelete, onReturn: onReturn)
+    }
+
+    func makeNSView(context: Context) -> WindowTrackingView {
+        let view = WindowTrackingView()
+        view.windowDidChange = { [weak coordinator = context.coordinator] window in
+            coordinator?.window = window
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: WindowTrackingView, context: Context) {
+        context.coordinator.onDelete = onDelete
+        context.coordinator.onReturn = onReturn
+        context.coordinator.window = nsView.window
+    }
+
+    final class Coordinator {
+        weak var window: NSWindow?
+        var onDelete: () -> Bool
+        var onReturn: () -> Bool
+        private var eventMonitor: Any? = nil
+
+        init(onDelete: @escaping () -> Bool, onReturn: @escaping () -> Bool) {
+            self.onDelete = onDelete
+            self.onReturn = onReturn
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
+                [weak self] event in
+                self?.handle(event) ?? event
+            }
+        }
+
+        deinit {
+            if let eventMonitor {
+                NSEvent.removeMonitor(eventMonitor)
+            }
+        }
+
+        private func handle(_ event: NSEvent) -> NSEvent? {
+            guard event.window === window,
+                  !isEditingText(in: event.window),
+                  event.modifierFlags.intersection([.command, .control, .option]).isEmpty
+            else {
+                return event
+            }
+
+            switch event.keyCode {
+            case 51, 117:
+                return onDelete() ? nil : event
+            case 36, 76:
+                return onReturn() ? nil : event
+            default:
+                return event
+            }
+        }
+
+        private func isEditingText(in window: NSWindow?) -> Bool {
+            window?.firstResponder is NSTextView
+                || window?.firstResponder is NSTextField
+        }
+    }
+
+    final class WindowTrackingView: NSView {
+        var windowDidChange: ((NSWindow?) -> Void)?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            windowDidChange?(window)
+        }
+    }
 }
 
 private struct LibraryModePicker: View {
@@ -517,6 +642,8 @@ private struct TorrentPosterCard: View {
     let torrent: NativeTorrent
     let metadata: LibraryMetadata?
     let language: AppLanguage
+    let isSelected: Bool
+    let select: () -> Void
     let play: () -> Void
 
     private var texts: LibraryTexts { LibraryTexts(language: language) }
@@ -580,7 +707,16 @@ private struct TorrentPosterCard: View {
             .foregroundStyle(.secondary)
         }
         .padding(9)
-        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 16))
+        .background(
+            isSelected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.07),
+            in: RoundedRectangle(cornerRadius: 16)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(isSelected ? Color.accentColor : .clear, lineWidth: 1.5)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onTapGesture(perform: select)
     }
 }
 
@@ -589,6 +725,8 @@ private struct TorrentLargeCard: View {
     let metadata: LibraryMetadata?
     let language: AppLanguage
     let translationMode: OverviewTranslationMode
+    let isSelected: Bool
+    let select: () -> Void
     let play: () -> Void
 
     private var texts: LibraryTexts { LibraryTexts(language: language) }
@@ -680,7 +818,7 @@ private struct TorrentLargeCard: View {
         .background {
             let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
             ZStack {
-                Color.secondary.opacity(0.07)
+                isSelected ? Color.accentColor.opacity(0.16) : Color.secondary.opacity(0.07)
                 if let value = metadata?.backdropURL,
                    let url = URL(string: value),
                    !value.isEmpty {
@@ -702,6 +840,12 @@ private struct TorrentLargeCard: View {
             }
             .clipShape(shape)
         }
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(isSelected ? Color.accentColor : .clear, lineWidth: 1.5)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .onTapGesture(perform: select)
     }
 }
 
@@ -716,6 +860,10 @@ private struct LibraryPoster: View {
             url: value.isEmpty ? nil : URL(string: value),
             contentMode: .fill,
             placeholderSystemImage: "film"
+        )
+        .posterQuickLook(
+            url: value.isEmpty ? nil : URL(string: value),
+            title: metadata?.displayTitle ?? torrent.displayTitle
         )
     }
 }
@@ -743,6 +891,10 @@ private struct TorrentLibraryRow: View {
                     )
                         .frame(width: 40, height: 40)
                         .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .posterQuickLook(
+                            url: posterValue.isEmpty ? nil : URL(string: posterValue),
+                            title: metadata?.displayTitle ?? torrent.displayTitle
+                        )
                     if torrent.isActive {
                         Image(systemName: "play.fill")
                             .font(.caption.weight(.bold))
@@ -792,7 +944,6 @@ private struct TorrentDetailView: View {
     let metadata: LibraryMetadata?
     let language: AppLanguage
     let translationMode: OverviewTranslationMode
-    @State private var showsDeleteConfirmation = false
 
     private var texts: LibraryTexts {
         LibraryTexts(language: language)
@@ -804,33 +955,72 @@ private struct TorrentDetailView: View {
                 poster
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(metadata?.displayTitle ?? torrent.displayTitle)
-                        .font(.system(size: 18, weight: .semibold, design: .rounded))
-                        .lineLimit(3)
+                    HStack(alignment: .top, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(metadata?.displayTitle ?? torrent.displayTitle)
+                                .font(.system(size: 18, weight: .semibold, design: .rounded))
+                                .lineLimit(3)
 
-                    if let originalTitle = metadata?.originalTitle,
-                       !originalTitle.isEmpty,
-                       originalTitle != metadata?.displayTitle {
-                        Text(originalTitle)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                            if let originalTitle = metadata?.originalTitle,
+                               !originalTitle.isEmpty,
+                               originalTitle != metadata?.displayTitle {
+                                Text(originalTitle)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
 
-                    if let metadata {
-                        Text(metadataFacts(metadata).joined(separator: " · "))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            if let metadata {
+                                Text(metadataFacts(metadata).joined(separator: " · "))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
 
-                        if !metadata.genres.isEmpty {
-                            Text(metadata.genres.joined(separator: " · "))
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                                if !metadata.genres.isEmpty {
+                                    Text(metadata.genres.joined(separator: " · "))
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                            } else if !torrent.category.isEmpty {
+                                Text(torrent.category)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
-                    } else if !torrent.category.isEmpty {
-                        Text(torrent.category)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+
+                        Spacer(minLength: 4)
+
+                        Menu {
+                            ForEach(ExternalPlayerChoice.allCases) { choice in
+                                Button {
+                                    model.setPlayer(choice, language: language)
+                                } label: {
+                                    if model.playerChoice == choice {
+                                        Label(
+                                            choice.title(language: language),
+                                            systemImage: "checkmark"
+                                        )
+                                    } else {
+                                        Text(choice.title(language: language))
+                                    }
+                                }
+                            }
+                        } label: {
+                            Label(
+                                model.playerChoice.title(language: language),
+                                systemImage: "play.rectangle"
+                            )
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+
+                        Button {
+                            model.requestRemovalOfSelection()
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.red)
+                        .help(texts.remove)
                     }
 
                     if model.resolvingMetadataHashes.contains(torrent.hash.lowercased()) {
@@ -852,60 +1042,10 @@ private struct TorrentDetailView: View {
                             lineLimit: 3,
                             expandedMaximumHeight: 180
                         )
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-
-                Spacer()
-
-                Menu {
-                    ForEach(ExternalPlayerChoice.allCases) { choice in
-                        Button {
-                            model.setPlayer(choice, language: language)
-                        } label: {
-                            if model.playerChoice == choice {
-                                Label(
-                                    choice.title(language: language),
-                                    systemImage: "checkmark"
-                                )
-                            } else {
-                                Text(choice.title(language: language))
-                            }
-                        }
-                    }
-                } label: {
-                    Label(
-                        model.playerChoice.title(language: language),
-                        systemImage: "play.rectangle"
-                    )
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-
-                Button {
-                    showsDeleteConfirmation = true
-                } label: {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.red)
-                .help(texts.remove)
-                .popover(
-                    isPresented: $showsDeleteConfirmation,
-                    arrowEdge: .top
-                ) {
-                    DeleteConfirmationPopover(
-                        title: torrent.displayTitle,
-                        texts: texts,
-                        isRemoving: model.isRemoving,
-                        cancel: {
-                            showsDeleteConfirmation = false
-                        },
-                        confirm: {
-                            showsDeleteConfirmation = false
-                            model.removeSelected()
-                        }
-                    )
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             statistics
@@ -970,8 +1110,12 @@ private struct TorrentDetailView: View {
 
         if let url = URL(string: posterValue), !posterValue.isEmpty {
             CachedRemoteImage(url: url, contentMode: .fill, placeholderSystemImage: "film")
-            .frame(width: 72, height: 96)
-            .clipShape(shape)
+                .frame(width: 72, height: 96)
+                .clipShape(shape)
+                .posterQuickLook(
+                    url: url,
+                    title: metadata?.displayTitle ?? torrent.displayTitle
+                )
         } else {
             posterPlaceholder
                 .frame(width: 72, height: 96)
@@ -1139,52 +1283,6 @@ private struct TorrentFileRow: View {
     }
 }
 
-private struct DeleteConfirmationPopover: View {
-    let title: String
-    let texts: LibraryTexts
-    let isRemoving: Bool
-    let cancel: () -> Void
-    let confirm: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label(texts.removeMaterialQuestion, systemImage: "trash")
-                .font(.headline)
-                .foregroundStyle(.red)
-
-            Text(title)
-                .font(.callout)
-                .lineLimit(2)
-
-            Text(texts.removeMaterialHint)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 8) {
-                Spacer()
-
-                Button(texts.cancel, action: cancel)
-                    .keyboardShortcut(.cancelAction)
-
-                Button(role: .destructive, action: confirm) {
-                    if isRemoving {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Text(texts.remove)
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.red)
-                .keyboardShortcut(.defaultAction)
-                .disabled(isRemoving)
-            }
-        }
-        .padding(16)
-        .frame(width: 300)
-    }
-}
-
 private struct LibraryTexts {
     let language: AppLanguage
 
@@ -1221,13 +1319,26 @@ private struct LibraryTexts {
             : "Add a magnet link or a torrent file."
     }
     var remove: String { language == .russian ? "Удалить" : "Remove" }
-    var removeMaterialQuestion: String {
-        language == .russian ? "Удалить материал?" : "Remove this item?"
+    func removeMaterialQuestion(count: Int) -> String {
+        if count > 1 {
+            return language == .russian ? "Удалить выбранные материалы?" : "Remove selected items?"
+        }
+        return language == .russian ? "Удалить материал?" : "Remove this item?"
     }
-    var removeMaterialHint: String {
-        language == .russian
+    func removeMaterialHint(count: Int) -> String {
+        if count > 1 {
+            return language == .russian
+                ? "Выбранные материалы будут удалены из библиотеки TorrServer."
+                : "The selected items will be removed from the TorrServer library."
+        }
+        return language == .russian
             ? "Материал будет удалён из библиотеки TorrServer."
             : "This item will be removed from the TorrServer library."
+    }
+    func selectedMaterialCount(_ count: Int) -> String {
+        language == .russian
+            ? "Выбрано материалов: \(count)"
+            : "Selected items: \(count)"
     }
     var downloaded: String { language == .russian ? "Загружено" : "Downloaded" }
     var files: String { language == .russian ? "Файлы" : "Files" }
