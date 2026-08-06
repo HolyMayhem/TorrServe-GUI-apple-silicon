@@ -1,9 +1,34 @@
 import SwiftUI
 
-enum AppSection: String {
-    case server
+enum AppSection: String, CaseIterable, Identifiable {
     case library
     case search
+    case server
+    case settings
+
+    var id: Self { self }
+
+    func title(language: AppLanguage) -> String {
+        switch self {
+        case .library:
+            return language == .russian ? "Библиотека" : "Library"
+        case .search:
+            return language == .russian ? "Поиск" : "Search"
+        case .server:
+            return language == .russian ? "Сервер" : "Server"
+        case .settings:
+            return language == .russian ? "Настройки" : "Settings"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .library: return "film.stack"
+        case .search: return "magnifyingglass"
+        case .server: return "network"
+        case .settings: return "gearshape"
+        }
+    }
 }
 
 struct ApplicationRootView: View {
@@ -11,81 +36,478 @@ struct ApplicationRootView: View {
     @ObservedObject var libraryModel: LibraryViewModel
     @ObservedObject var searchModel: SearchViewModel
 
-    var body: some View {
-        ZStack {
-            applicationBackground
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
-            VStack(spacing: 12) {
-                ApplicationHeader(model: mainModel)
-                    .zIndex(100)
-                sectionContent
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .zIndex(0)
+    private var selection: Binding<AppSection?> {
+        Binding(
+            get: { mainModel.selectedSection },
+            set: { section in
+                guard let section, section != mainModel.selectedSection else { return }
+                mainModel.selectedSection = section
+                mainModel.onSectionChanged?(section)
             }
-            .padding(.horizontal, 17)
-            .padding(.top, 6)
-            .padding(.bottom, 17)
-        }
-        .frame(
-            minWidth: 580,
-            maxWidth: .infinity,
-            maxHeight: .infinity
         )
+    }
+
+    var body: some View {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            AppSidebarView(
+                mainModel: mainModel,
+                libraryModel: libraryModel,
+                selection: selection
+            )
+            .navigationSplitViewColumnWidth(min: 220, ideal: 245, max: 285)
+        } detail: {
+            NavigationStack {
+                detailContent
+                    .navigationTitle(mainModel.selectedSection.title(language: mainModel.language))
+                    .toolbar {
+                        toolbarContent
+                    }
+            }
+        }
+        .frame(minWidth: 900, minHeight: 560)
         .sheet(isPresented: $libraryModel.showsPlayerSetup) {
             PlayerSetupView(
                 model: libraryModel,
                 language: mainModel.language
             )
         }
+        .onChange(of: mainModel.jackettEnabled) { _, enabled in
+            if !enabled, mainModel.selectedSection == .search {
+                mainModel.selectedSection = .library
+            }
+        }
     }
 
     @ViewBuilder
-    private var sectionContent: some View {
+    private var detailContent: some View {
         switch mainModel.selectedSection {
-        case .server:
-            MainWindowView(model: mainModel)
         case .library:
             LibraryView(
                 mainModel: mainModel,
                 model: libraryModel
             )
+            .padding(16)
         case .search:
             SearchView(
                 mainModel: mainModel,
                 model: searchModel
             )
+            .padding(16)
+        case .server:
+            MainWindowView(model: mainModel)
+                .padding(16)
+        case .settings:
+            SettingsView(model: mainModel)
+                .padding(.horizontal, 18)
         }
     }
 
-    private var applicationBackground: some View {
-        ZStack {
-            Rectangle()
-                .fill(.regularMaterial)
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        switch mainModel.selectedSection {
+        case .library:
+            ToolbarItemGroup {
+                Button {
+                    libraryModel.chooseTorrentFiles(language: mainModel.language)
+                } label: {
+                    Label(
+                        mainModel.language == .russian ? "Добавить torrent-файл" : "Add torrent file",
+                        systemImage: "doc.badge.plus"
+                    )
+                }
+                .disabled(libraryModel.isAdding || !mainModel.canStop)
+                .help(mainModel.language == .russian ? "Добавить torrent-файл" : "Add torrent file")
 
-            Color(nsColor: .windowBackgroundColor)
-                .opacity(0.46)
+                Button {
+                    libraryModel.showsMagnetSheet = true
+                } label: {
+                    Label(
+                        mainModel.language == .russian ? "Добавить magnet-ссылку" : "Add magnet link",
+                        systemImage: "link.badge.plus"
+                    )
+                }
+                .disabled(libraryModel.isAdding || !mainModel.canStop)
+                .help(mainModel.language == .russian ? "Добавить magnet-ссылку" : "Add magnet link")
 
-            LinearGradient(
-                colors: [
-                    Color.white.opacity(0.055),
-                    Color.green.opacity(0.022),
-                    Color(nsColor: .windowBackgroundColor).opacity(0.14)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
+                Picker("", selection: $libraryModel.displayMode) {
+                    ForEach(LibraryDisplayMode.allCases) { mode in
+                        Label(
+                            mode.title(language: mainModel.language),
+                            systemImage: mode.systemImage
+                        )
+                        .tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: libraryModel.displayMode) { _, mode in
+                    libraryModel.setDisplayMode(mode)
+                }
+                .help(mainModel.language == .russian ? "Переключить вид библиотеки" : "Change library view")
 
-            RadialGradient(
-                colors: [
-                    Color.white.opacity(0.035),
-                    Color.clear
-                ],
-                center: .topLeading,
-                startRadius: 0,
-                endRadius: 360
-            )
+                Button {
+                    libraryModel.refresh()
+                } label: {
+                    Label(
+                        mainModel.language == .russian ? "Обновить" : "Refresh",
+                        systemImage: "arrow.clockwise"
+                    )
+                }
+                .disabled(libraryModel.isRefreshing || !mainModel.canStop)
+            }
+
+        case .search:
+            ToolbarItemGroup {
+                Button {
+                    searchModel.search(language: mainModel.language)
+                } label: {
+                    Label(
+                        mainModel.language == .russian ? "Искать" : "Search",
+                        systemImage: "magnifyingglass"
+                    )
+                }
+                .disabled(
+                    searchModel.isSearching
+                        || searchModel.query.trimmingCharacters(
+                            in: .whitespacesAndNewlines
+                        ).isEmpty
+                )
+
+                Button {
+                    searchModel.showsSettings = true
+                } label: {
+                    Label("Jackett", systemImage: "gearshape.2")
+                }
+            }
+
+        case .server:
+            ToolbarItemGroup {
+                Button {
+                    mainModel.onRefreshStorage?()
+                } label: {
+                    Label(
+                        mainModel.language == .russian ? "Обновить" : "Refresh",
+                        systemImage: "arrow.clockwise"
+                    )
+                }
+                .disabled(mainModel.isRefreshingStorage)
+
+                Button {
+                    mainModel.onOpenWeb?()
+                } label: {
+                    Label("Web UI", systemImage: "safari")
+                }
+                .disabled(!mainModel.canOpenWeb)
+                .help(mainModel.language == .russian ? "Открыть Web UI" : "Open Web UI")
+            }
+
+        case .settings:
+            ToolbarItemGroup {
+                Button {
+                    mainModel.onDownload?()
+                } label: {
+                    Label(
+                        mainModel.language == .russian ? "Скачать TorrServer" : "Download TorrServer",
+                        systemImage: "arrow.down.circle"
+                    )
+                }
+                .disabled(!mainModel.canDownload)
+            }
         }
-        .ignoresSafeArea()
+    }
+}
+
+private struct AppSidebarView: View {
+    @ObservedObject var mainModel: MainWindowModel
+    @ObservedObject var libraryModel: LibraryViewModel
+    @Binding var selection: AppSection?
+
+    private var primarySections: [AppSection] {
+        mainModel.jackettEnabled
+            ? [.library, .search, .server]
+            : [.library, .server]
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            List(selection: $selection) {
+                Section {
+                    ForEach(primarySections) { section in
+                        SidebarNavigationItem(
+                            section: section,
+                            language: mainModel.language
+                        )
+                    }
+                }
+
+                Section {
+                    SidebarNavigationItem(
+                        section: .settings,
+                        language: mainModel.language
+                    )
+                }
+            }
+            .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+
+            Divider()
+
+            ServerStatusSidebarView(
+                mainModel: mainModel,
+                openServer: { selection = .server }
+            )
+            .padding(12)
+        }
+        .background(.thinMaterial)
+    }
+}
+
+private struct SidebarNavigationItem: View {
+    let section: AppSection
+    let language: AppLanguage
+
+    var body: some View {
+        Label(section.title(language: language), systemImage: section.systemImage)
+            .tag(section)
+            .accessibilityLabel(section.title(language: language))
+    }
+}
+
+private struct ServerStatusSidebarView: View {
+    @ObservedObject var mainModel: MainWindowModel
+    let openServer: () -> Void
+
+    private var texts: Texts { Texts(language: mainModel.language) }
+
+    private var cacheText: String {
+        ByteCountFormatter.string(
+            fromByteCount: mainModel.storage.cacheUsed,
+            countStyle: .memory
+        )
+    }
+
+    private var statusTitle: String {
+        switch mainModel.statusKind {
+        case .running:
+            return mainModel.language == .russian ? "Запущен" : "Running"
+        case .working:
+            return mainModel.language == .russian ? "Запускается" : "Working"
+        case .failed:
+            return mainModel.language == .russian ? "Ошибка" : "Error"
+        case .stopped:
+            return mainModel.language == .russian ? "Остановлен" : "Stopped"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(mainModel.statusKind.color)
+                    .frame(width: 9, height: 9)
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("TorrServer")
+                        .font(.caption.weight(.semibold))
+                    Text(statusTitle)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button {
+                    mainModel.canStop ? mainModel.onStop?() : mainModel.onStart?()
+                } label: {
+                    if mainModel.statusKind == .working {
+                        ProgressView()
+                            .controlSize(.mini)
+                    } else {
+                        Image(systemName: mainModel.canStop ? "stop.fill" : "play.fill")
+                    }
+                }
+                .buttonStyle(.borderless)
+                .disabled(!(mainModel.canStart || mainModel.canStop))
+                .help(mainModel.canStop ? texts.stop : texts.start)
+                .accessibilityLabel(mainModel.canStop ? texts.stop : texts.start)
+            }
+
+            if mainModel.canStop {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(
+                        mainModel.currentSpeedText.isEmpty
+                            ? SpeedFormatter.string(bytesPerSecond: 0, unit: mainModel.speedUnit)
+                            : mainModel.currentSpeedText,
+                        systemImage: "arrow.down.circle"
+                    )
+                    Label(cacheText, systemImage: "internaldrive")
+                }
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+            }
+
+            Button {
+                openServer()
+            } label: {
+                Label(
+                    mainModel.language == .russian ? "Открыть сервер" : "Open Server",
+                    systemImage: "slider.horizontal.3"
+                )
+                .frame(maxWidth: .infinity)
+            }
+            .controlSize(.small)
+            .help(mainModel.language == .russian ? "Открыть настройки сервера" : "Open server settings")
+        }
+        .padding(10)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+private struct SettingsView: View {
+    @ObservedObject var model: MainWindowModel
+
+    private var texts: Texts { Texts(language: model.language) }
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle(
+                    texts.launchAtLogin,
+                    isOn: setting(
+                        \.launchAtLogin,
+                        callback: model.onLaunchAtLoginChanged
+                    )
+                )
+                Toggle(
+                    texts.autoStartServer,
+                    isOn: setting(
+                        \.autoStartServer,
+                        callback: model.onAutoStartChanged
+                    )
+                )
+                Toggle(
+                    texts.showSpeed,
+                    isOn: setting(
+                        \.showSpeed,
+                        callback: model.onShowSpeedChanged
+                    )
+                )
+                Toggle(
+                    texts.hideDockIcon,
+                    isOn: setting(
+                        \.hideDockIcon,
+                        callback: model.onHideDockIconChanged
+                    )
+                )
+                Toggle(
+                    texts.notifications,
+                    isOn: setting(
+                        \.notificationsEnabled,
+                        callback: model.onNotificationsChanged
+                    )
+                )
+                .disabled(model.notificationsAuthorizationPending)
+            } header: {
+                Text(model.language == .russian ? "Приложение" : "Application")
+            }
+
+            Section {
+                Picker(texts.speedFormat, selection: $model.speedUnit) {
+                    Text(texts.automaticSpeed).tag(SpeedDisplayUnit.automatic)
+                    Text(texts.megabytesSpeed).tag(SpeedDisplayUnit.megabytes)
+                    Text(texts.megabitsSpeed).tag(SpeedDisplayUnit.megabits)
+                }
+                .onChange(of: model.speedUnit) { _, unit in
+                    model.onSpeedUnitChanged?(unit)
+                }
+
+                Picker(texts.languageLabel, selection: $model.language) {
+                    Text(texts.russian).tag(AppLanguage.russian)
+                    Text(texts.english).tag(AppLanguage.english)
+                }
+                .onChange(of: model.language) { _, language in
+                    model.onLanguageChanged?(language)
+                }
+
+                Picker(texts.jackettSearch, selection: $model.jackettEnabled) {
+                    Text("Jackett").tag(true)
+                    Text("Off").tag(false)
+                }
+                .onChange(of: model.jackettEnabled) { _, isEnabled in
+                    model.onJackettEnabledChanged?(isEnabled)
+                }
+            } header: {
+                Text(model.language == .russian ? "Интерфейс" : "Interface")
+            }
+
+            Section {
+                Picker(texts.metadataProvider, selection: $model.metadataProvider) {
+                    ForEach(MetadataProvider.allCases, id: \.self) { provider in
+                        Text(provider.displayName).tag(provider)
+                    }
+                }
+                .onChange(of: model.metadataProvider) { _, provider in
+                    model.onMetadataProviderChanged?(provider)
+                }
+
+                SecureField(
+                    "TMDB API Key",
+                    text: Binding(
+                        get: { model.tmdbAPIKey },
+                        set: { value in
+                            model.tmdbAPIKey = value
+                            model.onMetadataAPIKeyChanged?(.tmdb, value)
+                        }
+                    )
+                )
+
+                SecureField(
+                    "OMDb API Key",
+                    text: Binding(
+                        get: { model.omdbAPIKey },
+                        set: { value in
+                            model.omdbAPIKey = value
+                            model.onMetadataAPIKeyChanged?(.omdb, value)
+                        }
+                    )
+                )
+
+                Picker(
+                    model.language == .russian ? "Перевод описаний" : "Overview translation",
+                    selection: $model.overviewTranslationMode
+                ) {
+                    Text(model.language == .russian ? "Автоматически" : "Automatic")
+                        .tag(OverviewTranslationMode.automatic)
+                    Text(model.language == .russian ? "Оригинал" : "Original")
+                        .tag(OverviewTranslationMode.original)
+                }
+                .onChange(of: model.overviewTranslationMode) { _, mode in
+                    model.onOverviewTranslationModeChanged?(mode)
+                }
+            } header: {
+                Text(model.language == .russian ? "Метаданные" : "Metadata")
+            } footer: {
+                Text(model.language == .russian
+                    ? "Ключи хранятся локально и используются только для получения постеров и описаний."
+                    : "Keys are stored locally and used only to fetch posters and descriptions.")
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func setting(
+        _ keyPath: ReferenceWritableKeyPath<MainWindowModel, Bool>,
+        callback: ((Bool) -> Void)?
+    ) -> Binding<Bool> {
+        Binding(
+            get: { model[keyPath: keyPath] },
+            set: { value in
+                model[keyPath: keyPath] = value
+                callback?(value)
+            }
+        )
     }
 }
 
@@ -165,228 +587,5 @@ private struct PlayerSetupView: View {
         }
         .padding(12)
         .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-    }
-}
-
-private struct ApplicationHeader: View {
-    @ObservedObject var model: MainWindowModel
-    @State private var isHoveringStatus = false
-
-    var body: some View {
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("TorrServer")
-                    .font(.system(size: 24, weight: .semibold, design: .rounded))
-                    .fixedSize()
-                Button {
-                    model.onOpenContacts?()
-                } label: {
-                    Text("Holy Mayhem")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .focusable(false)
-                .accessibilityLabel(
-                    model.language == .russian
-                        ? "Связаться с Holy Mayhem"
-                        : "Contact Holy Mayhem"
-                )
-            }
-            .layoutPriority(3)
-
-            AppSectionPicker(model: model)
-                .layoutPriority(2)
-
-            Spacer(minLength: 10)
-
-            HStack(spacing: 7) {
-                Circle()
-                    .fill(model.statusKind.color)
-                    .frame(width: 10, height: 10)
-                    .shadow(
-                        color: model.statusKind.color.opacity(0.45),
-                        radius: 4
-                    )
-
-                Text(model.statusText)
-                    .font(.system(size: 12.5, weight: .medium))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            .fixedSize(horizontal: true, vertical: false)
-            .padding(.horizontal, 13)
-            .frame(height: 32)
-            .applicationHeaderGlass(in: Capsule())
-            .layoutPriority(1)
-            .contentShape(Capsule())
-            .onHover { isHoveringStatus = $0 }
-            .overlay(alignment: .topTrailing) {
-                if isHoveringStatus,
-                   model.statusKind == .failed,
-                   !model.statusTooltip.isEmpty {
-                    ServerErrorTooltip(text: model.statusTooltip)
-                        .offset(y: 40)
-                        .transition(
-                            .opacity.combined(
-                                with: .scale(
-                                    scale: 0.96,
-                                    anchor: .topTrailing
-                                )
-                            )
-                        )
-                }
-            }
-            .animation(
-                .easeOut(duration: 0.14),
-                value: isHoveringStatus
-            )
-            .zIndex(10)
-        }
-        .zIndex(2)
-    }
-}
-
-private struct ServerErrorTooltip: View {
-    let text: String
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 9) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.red)
-
-            Text(text)
-                .font(.system(size: 11.5))
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(12)
-        .frame(width: 330, alignment: .leading)
-        .background(
-            .regularMaterial,
-            in: RoundedRectangle(cornerRadius: 13, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .stroke(.white.opacity(0.14), lineWidth: 0.5)
-        }
-        .shadow(color: .black.opacity(0.28), radius: 14, y: 6)
-        .allowsHitTesting(false)
-    }
-}
-
-struct AppSectionPicker: View {
-    @ObservedObject var model: MainWindowModel
-    @Namespace private var selectionAnimation
-
-    private let selectionSpring = Animation.spring(
-        response: 0.32,
-        dampingFraction: 0.84,
-        blendDuration: 0.10
-    )
-
-    private var serverTitle: String {
-        model.language == .russian ? "Сервер" : "Server"
-    }
-
-    private var libraryTitle: String {
-        model.language == .russian ? "Библиотека" : "Library"
-    }
-
-    private var searchTitle: String {
-        model.language == .russian ? "Поиск" : "Search"
-    }
-
-    var body: some View {
-        HStack(spacing: 0) {
-            sectionButton(
-                title: serverTitle,
-                systemImage: "bolt.horizontal.circle",
-                section: .server
-            )
-            sectionButton(
-                title: libraryTitle,
-                systemImage: "film.stack",
-                section: .library
-            )
-            if model.jackettEnabled {
-                sectionButton(
-                    title: searchTitle,
-                    systemImage: "magnifyingglass",
-                    section: .search
-                )
-                .transition(
-                    .opacity.combined(with: .scale(scale: 0.92, anchor: .leading))
-                )
-            }
-        }
-        .padding(3)
-        .frame(height: 32)
-        .fixedSize(horizontal: true, vertical: false)
-        .background(Color.secondary.opacity(0.10), in: Capsule())
-        .overlay(Capsule().stroke(.white.opacity(0.10), lineWidth: 0.5))
-        .animation(selectionSpring, value: model.jackettEnabled)
-    }
-
-    private func sectionButton(
-        title: String,
-        systemImage: String,
-        section: AppSection
-    ) -> some View {
-        Button {
-            guard model.selectedSection != section else { return }
-            withAnimation(selectionSpring) {
-                model.selectedSection = section
-                model.onSectionChanged?(section)
-            }
-        } label: {
-            HStack(spacing: 7) {
-                Image(systemName: systemImage)
-                Text(title)
-            }
-                .font(.system(
-                    size: 11,
-                    weight: .semibold
-                ))
-                .foregroundStyle(
-                    model.selectedSection == section ? Color.white : Color.secondary
-                )
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-                .padding(.horizontal, 15)
-                .frame(maxHeight: .infinity)
-                .background {
-                    if model.selectedSection == section {
-                        Capsule()
-                            .fill(Color.accentColor.opacity(0.76))
-                            .shadow(color: .black.opacity(0.12), radius: 2, y: 1)
-                            .matchedGeometryEffect(
-                                id: "activeSection",
-                                in: selectionAnimation
-                            )
-                    }
-                }
-                .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .animation(
-            .easeInOut(duration: 0.18),
-            value: model.selectedSection
-        )
-        .accessibilityAddTraits(
-            model.selectedSection == section ? .isSelected : []
-        )
-    }
-}
-
-private extension View {
-    @ViewBuilder
-    func applicationHeaderGlass<S: Shape>(in shape: S) -> some View {
-        if #available(macOS 26.0, *) {
-            self.glassEffect(.regular, in: shape)
-        } else {
-            self.background(.regularMaterial, in: shape)
-                .overlay(shape.stroke(.white.opacity(0.12), lineWidth: 0.5))
-        }
     }
 }

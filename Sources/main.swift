@@ -1345,6 +1345,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         NSWorkspace.shared.open(webUIURL)
     }
 
+    @objc private func addTorrentFromMenu(_ sender: Any?) {
+        ensureWindowForCommand()
+        mainWindowModel.selectedSection = .library
+        libraryModel.chooseTorrentFiles(language: currentLanguage)
+    }
+
+    @objc private func addMagnetFromMenu(_ sender: Any?) {
+        ensureWindowForCommand()
+        mainWindowModel.selectedSection = .library
+        libraryModel.showsMagnetSheet = true
+    }
+
+    @objc private func focusSearchFromMenu(_ sender: Any?) {
+        ensureWindowForCommand()
+        if mainWindowModel.jackettEnabled {
+            mainWindowModel.selectedSection = .search
+        } else {
+            mainWindowModel.selectedSection = .library
+        }
+    }
+
+    private func ensureWindowForCommand() {
+        if window == nil {
+            buildWindow()
+        }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     @objc private func showMainWindow(_ sender: Any?) {
         if window == nil {
             buildWindow()
@@ -1449,8 +1478,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
             mainWindowModel.jackettEnabled = enabled
             if !enabled, mainWindowModel.selectedSection == .search {
-                mainWindowModel.selectedSection = .server
-                resizeWindow(for: .server)
+                mainWindowModel.selectedSection = .library
             }
         }
     }
@@ -1579,8 +1607,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private func buildWindow() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 580, height: 500),
-            styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+            contentRect: NSRect(x: 0, y: 0, width: 1080, height: 680),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -1590,10 +1618,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         window.titleVisibility = .hidden
         window.titlebarSeparatorStyle = .none
         window.isMovableByWindowBackground = true
-        window.backgroundColor = .clear
-        window.isOpaque = false
+        window.backgroundColor = .windowBackgroundColor
+        window.isOpaque = true
         window.hasShadow = true
-        window.standardWindowButton(.zoomButton)?.isEnabled = false
 
         mainWindowModel.path = initialExecutablePath()
         mainWindowModel.language = currentLanguage
@@ -1713,69 +1740,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         window.contentView = hostingView
         hostingView.layoutSubtreeIfNeeded()
 
-        let fixedContentSize = NSSize(width: 920, height: 600)
-        serverContentSize = fixedContentSize
-        window.setContentSize(fixedContentSize)
-        window.contentMinSize = fixedContentSize
-        window.contentMaxSize = fixedContentSize
+        let initialContentSize = NSSize(width: 1080, height: 680)
+        serverContentSize = initialContentSize
+        window.setContentSize(initialContentSize)
+        window.contentMinSize = NSSize(width: 900, height: 560)
+        window.contentMaxSize = NSSize(width: 2400, height: 1600)
     }
 
     private func resizeWindow(for section: AppSection) {
-        guard window != nil else { return }
-
-        let targetSize = serverContentSize
-
-        guard window.contentView?.frame.size != targetSize else { return }
-
-        let currentFrame = window.frame
-        let contentRect = NSRect(origin: .zero, size: targetSize)
-        var targetFrame = window.frameRect(forContentRect: contentRect)
-        targetFrame.origin.x = currentFrame.midX - targetFrame.width / 2
-        targetFrame.origin.y = currentFrame.maxY - targetFrame.height
-
-        if let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {
-            if targetFrame.minX < visibleFrame.minX {
-                targetFrame.origin.x = visibleFrame.minX
-            }
-            if targetFrame.maxX > visibleFrame.maxX {
-                targetFrame.origin.x -= targetFrame.maxX - visibleFrame.maxX
-            }
-            if targetFrame.minY < visibleFrame.minY {
-                targetFrame.origin.y = visibleFrame.minY
-            }
-            if targetFrame.maxY > visibleFrame.maxY {
-                targetFrame.origin.y -= targetFrame.maxY - visibleFrame.maxY
-            }
-        }
-
-        let currentContentSize = window.contentLayoutRect.size
-        window.contentMinSize = NSSize(
-            width: min(currentContentSize.width, targetSize.width),
-            height: min(currentContentSize.height, targetSize.height)
-        )
-        window.contentMaxSize = NSSize(
-            width: max(currentContentSize.width, targetSize.width),
-            height: max(currentContentSize.height, targetSize.height)
-        )
-
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.28
-            context.timingFunction = CAMediaTimingFunction(
-                name: .easeInEaseOut
-            )
-            window.animator().setFrame(targetFrame, display: true)
-        } completionHandler: { [weak self] in
-            Task { @MainActor in
-                guard
-                    let self,
-                    self.mainWindowModel.selectedSection == section
-                else {
-                    return
-                }
-                self.window.contentMinSize = targetSize
-                self.window.contentMaxSize = targetSize
-            }
-        }
+        _ = section
     }
 
     private func buildMainMenu() {
@@ -1797,6 +1770,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             keyEquivalent: "q"
         )
         appMenuItem.submenu = appMenu
+
+        let fileMenuItem = NSMenuItem(
+            title: currentLanguage == .russian ? "Файл" : "File",
+            action: nil,
+            keyEquivalent: ""
+        )
+        let fileMenu = NSMenu(title: fileMenuItem.title)
+
+        let addTorrentItem = fileMenu.addItem(
+            withTitle: currentLanguage == .russian ? "Добавить torrent-файл…" : "Add Torrent File…",
+            action: #selector(addTorrentFromMenu(_:)),
+            keyEquivalent: "o"
+        )
+        addTorrentItem.target = self
+        addTorrentItem.keyEquivalentModifierMask = [.command]
+
+        let addMagnetItem = fileMenu.addItem(
+            withTitle: currentLanguage == .russian ? "Добавить magnet-ссылку…" : "Add Magnet Link…",
+            action: #selector(addMagnetFromMenu(_:)),
+            keyEquivalent: "l"
+        )
+        addMagnetItem.target = self
+        addMagnetItem.keyEquivalentModifierMask = [.command]
+
+        fileMenuItem.submenu = fileMenu
+        mainMenu.addItem(fileMenuItem)
 
         let editMenuItem = NSMenuItem(
             title: texts.edit,
@@ -1853,6 +1852,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
+
+        let navigateMenuItem = NSMenuItem(
+            title: currentLanguage == .russian ? "Навигация" : "Navigate",
+            action: nil,
+            keyEquivalent: ""
+        )
+        let navigateMenu = NSMenu(title: navigateMenuItem.title)
+        let searchItem = navigateMenu.addItem(
+            withTitle: currentLanguage == .russian ? "Перейти к поиску" : "Go to Search",
+            action: #selector(focusSearchFromMenu(_:)),
+            keyEquivalent: "f"
+        )
+        searchItem.target = self
+        searchItem.keyEquivalentModifierMask = [.command]
+        navigateMenuItem.submenu = navigateMenu
+        mainMenu.addItem(navigateMenuItem)
+
         NSApp.mainMenu = mainMenu
     }
 
@@ -2720,6 +2736,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             bytesPerSecond: 0,
             unit: currentSpeedDisplayUnit
         )
+        mainWindowModel.currentSpeedText = speedText
         popoverModel.speedText = speedText
         popoverModel.speedSamples = speedHistory
 

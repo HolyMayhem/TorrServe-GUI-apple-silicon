@@ -27,6 +27,7 @@ final class MainWindowModel: ObservableObject {
     @Published var statusText = ""
     @Published var statusTooltip = ""
     @Published var statusKind: MainStatusKind = .stopped
+    @Published var currentSpeedText = ""
 
     @Published var canStart = false
     @Published var canStop = false
@@ -47,7 +48,7 @@ final class MainWindowModel: ObservableObject {
     @Published var omdbAPIKey = ""
     @Published var overviewTranslationMode = OverviewTranslationMode.automatic
     @Published var speedUnit: SpeedDisplayUnit = .automatic
-    @Published var selectedSection: AppSection = .server
+    @Published var selectedSection: AppSection = .library
     @Published var detectedPlayers: [DetectedPlayer] = []
     @Published var preferredPlayer: ExternalPlayerChoice = .quickTime
     @Published var storage = TorrServerStorageSnapshot()
@@ -109,7 +110,6 @@ struct MainWindowView: View {
         VStack(spacing: 10) {
             executableSection
             actionSection
-            settingsSection
 
             HStack(alignment: .top, spacing: 10) {
                 storageSection

@@ -5,7 +5,6 @@ import UniformTypeIdentifiers
 struct LibraryView: View {
     @ObservedObject var mainModel: MainWindowModel
     @ObservedObject var model: LibraryViewModel
-    @State private var showsMagnetSheet = false
     @FocusState private var magnetFieldIsFocused: Bool
 
     private var texts: LibraryTexts {
@@ -28,7 +27,7 @@ struct LibraryView: View {
             Text(deletionAlertMessage)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .sheet(isPresented: $showsMagnetSheet) {
+        .sheet(isPresented: $model.showsMagnetSheet) {
             magnetSheet
         }
         .alert(item: $model.alert) { alert in
@@ -115,7 +114,7 @@ struct LibraryView: View {
 
                 Menu {
                     Button {
-                        showsMagnetSheet = true
+                        model.showsMagnetSheet = true
                     } label: {
                         Label(texts.addMagnet, systemImage: "link")
                     }
@@ -217,7 +216,7 @@ struct LibraryView: View {
 
                 Menu {
                     Button {
-                        showsMagnetSheet = true
+                        model.showsMagnetSheet = true
                     } label: {
                         Label(texts.addMagnet, systemImage: "link")
                     }
@@ -356,12 +355,12 @@ struct LibraryView: View {
                 Spacer()
 
                 Button(texts.cancel) {
-                    showsMagnetSheet = false
+                    model.showsMagnetSheet = false
                 }
 
                 Button(texts.add) {
                     model.addMagnet(language: mainModel.language)
-                    showsMagnetSheet = false
+                    model.showsMagnetSheet = false
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(model.magnetInput.trimmingCharacters(
@@ -393,16 +392,29 @@ struct LibraryView: View {
     }
 
     private var emptyLibrary: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "tray")
-                .font(.system(size: 30, weight: .light))
-            Text(texts.emptyLibrary)
-                .font(.headline)
+        ContentUnavailableView {
+            Label(texts.emptyLibrary, systemImage: "tray")
+        } description: {
             Text(texts.emptyLibraryHint)
-                .font(.caption)
-                .multilineTextAlignment(.center)
+        } actions: {
+            HStack {
+                Button {
+                    model.chooseTorrentFiles(language: mainModel.language)
+                } label: {
+                    Label(texts.addTorrentFile, systemImage: "doc.badge.plus")
+                }
+                .disabled(model.isAdding || !mainModel.canStop)
+                .help(texts.addTorrentFile)
+
+                Button {
+                    model.showsMagnetSheet = true
+                } label: {
+                    Label(texts.addMagnet, systemImage: "link.badge.plus")
+                }
+                .disabled(model.isAdding || !mainModel.canStop)
+                .help(texts.addMagnet)
+            }
         }
-        .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -448,7 +460,7 @@ struct LibraryView: View {
     }
 
     private func handleDeleteKey() -> Bool {
-        guard !showsMagnetSheet,
+        guard !model.showsMagnetSheet,
               model.pendingDeletionTorrents.isEmpty,
               !model.selectedTorrents.isEmpty else {
             return false
@@ -458,7 +470,7 @@ struct LibraryView: View {
     }
 
     private func handleReturnKey() -> Bool {
-        guard !showsMagnetSheet,
+        guard !model.showsMagnetSheet,
               model.pendingDeletionTorrents.isEmpty else {
             return false
         }

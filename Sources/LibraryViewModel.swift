@@ -132,6 +132,7 @@ final class LibraryViewModel: ObservableObject {
     @Published var isAdding = false
     @Published var isRemoving = false
     @Published var isDropTargeted = false
+    @Published var showsMagnetSheet = false
     @Published var alert: LibraryAlert?
     @Published var playerChoice: ExternalPlayerChoice
     @Published var customPlayerPath: String
